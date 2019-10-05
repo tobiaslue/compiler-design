@@ -161,6 +161,23 @@ let map_addr (addr:quad) : int option =
   if (addr < mem_bot) || (addr > mem_top) then None
   else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
 
+
+(*
+let interpret_operand (op:operand) : int64 = 
+ begin match op with
+   |Imm x -> begin match x with
+     |Lit x -> quad x
+     |Lbl x -> x
+   end
+   |Reg x -> Array.get (rind x) regs
+   |Ind1 x -> interpret_operand Imm x
+   |Ind2 x -> Array.get (map_addr(interpret_operand Reg x)) mem
+   |Ind3 (imm, reg) -> Array.get (Int64.add (interpret_operand Reg reg) (interpret_operand Imm imm)) mem
+  end
+*)
+
+
+
 (* Simulates one step of the machine:
     - fetch the instruction at %rip
     - compute the source and/or destination information from the operands
