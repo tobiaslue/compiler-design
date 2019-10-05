@@ -137,14 +137,29 @@ let sbytes_of_data : data -> sbyte list = function
 let debug_simulator = ref false
 
 (* Interpret a condition code with respect to the given flags. *)
-let interp_cnd {fo; fs; fz} : cnd -> bool = fun x -> failwith "interp_cnd unimplemented"
-
+let interp_cnd {fo; fs; fz} : cnd -> bool =
+  fun x -> begin match x with
+    |Eq -> if fz then true
+      else false
+    |Neq -> if not fz then true
+      else false
+    |Gt -> if (not fz) && (fo == fs) then true
+      else false
+    |Ge -> if fs == fo then true
+      else false
+    |Lt -> if fo != fs then true
+      else false
+    |Le -> if (fo != fs) || fz then true
+      else false
+  end
+        
 
 
 (* Maps an X86lite address into Some OCaml array index,
    or None if the address is not within the legal address space. *)
 let map_addr (addr:quad) : int option =
-  failwith "map_addr not implemented"
+  if (addr < mem_bot) || (addr > mem_top) then None
+  else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
 
 (* Simulates one step of the machine:
     - fetch the instruction at %rip
