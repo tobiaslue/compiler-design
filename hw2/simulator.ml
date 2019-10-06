@@ -137,22 +137,13 @@ let sbytes_of_data : data -> sbyte list = function
 let debug_simulator = ref false
 
 (* Interpret a condition code with respect to the given flags. *)
-let interp_cnd {fo; fs; fz} : cnd -> bool =
-  fun x -> begin match x with
-    |Eq -> if fz then true
-      else false
-    |Neq -> if not fz then true
-      else false
-    |Gt -> if (not fz) && (fo == fs) then true
-      else false
-    |Ge -> if fs == fo then true
-      else false
-    |Lt -> if fo != fs then true
-      else false
-    |Le -> if (fo != fs) || fz then true
-      else false
-  end
-        
+let interp_cnd {fo; fs; fz} : cnd -> bool = function
+  | Eq -> if fz then true else false
+  | Neq -> if not fz then true else false
+  | Lt -> if fs <> fo then true else false
+  | Le -> if (fs <> fo) || fz then true else false
+  | Gt -> if (fs = fo) && not fz then true else false
+  | Ge -> if (fs = fo) then true else false
 
 
 (* Maps an X86lite address into Some OCaml array index,
