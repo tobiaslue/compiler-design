@@ -142,7 +142,7 @@ let interp_cnd {fo; fs; fz} : cnd -> bool = function
   | Neq -> if not fz then true else false
   | Lt -> if fs <> fo then true else false
   | Le -> if (fs <> fo) || fz then true else false
-  | Gt -> if (fs = fo) && not fz then true else false
+  | Gt -> if (fs = fo) && (not fz) then true else false
   | Ge -> if (fs = fo) then true else false
 
 
@@ -150,10 +150,14 @@ let interp_cnd {fo; fs; fz} : cnd -> bool = function
    or None if the address is not within the legal address space. *)
 let map_addr (addr:quad) : int option =
   if (addr < mem_bot) || (addr > mem_top) then None
-  else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
-
+  else Some (Int64.to_int (Int64.sub addr mem_bot))
 
 (*
+let interpret_operand (op:operand) : int64 =
+  begin match op with
+    | Imm x -> 
+
+
 let interpret_operand (op:operand) : int64 = 
  begin match op with
    |Imm x -> begin match x with
