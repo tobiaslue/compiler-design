@@ -162,19 +162,29 @@ let map_addr (addr:quad) : int option =
   else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
 
 
-(*
-let interpret_operand (op:operand) : int64 = 
+
+let rec interpret_operand (op:operand) (mach:mach): int64 = 
  begin match op with
    |Imm x -> begin match x with
-     |Lit x -> quad x
-     |Lbl x -> x
+     |Lit x -> x
+     |Lbl x -> Int64.of_int 1 
    end
-   |Reg x -> Array.get (rind x) regs
-   |Ind1 x -> interpret_operand Imm x
-   |Ind2 x -> Array.get (map_addr(interpret_operand Reg x)) mem
-   |Ind3 (imm, reg) -> Array.get (Int64.add (interpret_operand Reg reg) (interpret_operand Imm imm)) mem
-  end
-*)
+   |Reg x -> Array.get mach.regs (rind x)
+   |Ind1 x -> interpret_operand (Imm x) mach 
+   |Ind2 x -> let addr = map_addr(interpret_operand (Reg x) mach) in 
+     begin match addr with
+       |Some x -> int64_of_sbytes [Array.get mach.mem x]
+       |None -> Int64.of_int 1
+     end
+   |Ind3 (imm, reg) -> 
+     let v1 = interpret_operand(Reg reg) mach in
+     let v2 = interpret_operand(Imm imm) mach in 
+     let addr = map_addr(Int64.add v1 v2) in
+     begin match addr with
+       |Some x -> int64_of_sbytes [Array.get mach.mem x]
+       |None -> Int64.of_int 1
+     end
+   end
 
 
 
@@ -186,7 +196,7 @@ let interpret_operand (op:operand) : int64 =
     - set the condition flags
 *)
 let step (m:mach) : unit =
-failwith "step unimplemented"
+  failwith "step unimplemented"
 
 (* Runs the machine until the rip register reaches a designated
    memory address. *)
