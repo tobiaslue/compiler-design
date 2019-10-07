@@ -150,7 +150,33 @@ let interp_cnd {fo; fs; fz} : cnd -> bool = function
    or None if the address is not within the legal address space. *)
 let map_addr (addr:quad) : int option =
   if (addr < mem_bot) || (addr > mem_top) then None
-  else Some (Int64.to_int (Int64.sub addr mem_bot))
+  else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
+
+
+
+let rec interpret_operand (op:operand) (mach:mach): int64 = 
+ begin match op with
+   |Imm x -> begin match x with
+     |Lit x -> x
+     |Lbl x -> Int64.of_int 1 
+   end
+   |Reg x -> Array.get mach.regs (rind x)
+   |Ind1 x -> interpret_operand (Imm x) mach 
+   |Ind2 x -> let addr = map_addr(interpret_operand (Reg x) mach) in 
+     begin match addr with
+       |Some x -> int64_of_sbytes [Array.get mach.mem x]
+       |None -> Int64.of_int 1
+     end
+   |Ind3 (imm, reg) -> 
+     let v1 = interpret_operand(Reg reg) mach in
+     let v2 = interpret_operand(Imm imm) mach in 
+     let addr = map_addr(Int64.add v1 v2) in
+     begin match addr with
+       |Some x -> int64_of_sbytes [Array.get mach.mem x]
+       |None -> Int64.of_int 1
+     end
+   end
+
 
 let mem_read (m:mem) (addr:quad) : int64 =
   let check = function
@@ -180,7 +206,7 @@ let interpret_operand (m:mach) (op:operand) : int64 =
     - set the condition flags
 *)
 let step (m:mach) : unit =
-failwith "step unimplemented"
+  failWith "step unimplemented"
 
 (* Runs the machine until the rip register reaches a designated
    memory address. *)
