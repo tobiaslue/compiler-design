@@ -196,7 +196,7 @@ let rec interpret_operand (op:operand) (mach:mach): int64 =
     - set the condition flags
 *)
 let step (m:mach) : unit =
-  failwith "step unimplemented"
+  failWith "step unimplemented"
 
 (* Runs the machine until the rip register reaches a designated
    memory address. *)
