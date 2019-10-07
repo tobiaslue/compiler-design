@@ -152,26 +152,25 @@ let map_addr (addr:quad) : int option =
   if (addr < mem_bot) || (addr > mem_top) then None
   else Some (Int64.to_int (Int64.sub addr mem_bot))
 
-(*
-let interpret_operand (op:operand) : int64 =
+let mem_read (m:mem) (addr:quad) : int64 =
+  let check = function
+    | Some x ->  x
+    | None -> raise X86lite_segfault
+  in 
+  let read_quad = 
+    Array.sub m (check (map_addr addr)) 8 
+  in
+  int64_of_sbytes (Array.to_list read_quad)
+
+let interpret_operand (m:mach) (op:operand) : int64 =
   begin match op with
-    | Imm x -> 
-
-
-let interpret_operand (op:operand) : int64 = 
- begin match op with
-   |Imm x -> begin match x with
-     |Lit x -> quad x
-     |Lbl x -> x
-   end
-   |Reg x -> Array.get (rind x) regs
-   |Ind1 x -> interpret_operand Imm x
-   |Ind2 x -> Array.get (map_addr(interpret_operand Reg x)) mem
-   |Ind3 (imm, reg) -> Array.get (Int64.add (interpret_operand Reg reg) (interpret_operand Imm imm)) mem
+    | Imm (Lit x) -> x 
+    | Reg x -> Array.get m.regs (rind x)
+    | Ind1 (Lit x) -> mem_read m.mem x
+    | Ind2 x -> mem_read m.mem (Array.get m.regs (rind x))
+    | Ind3 (Lit offset, reg) -> mem_read m.mem (Int64.add (Array.get m.regs (rind reg)) offset )
+    | _ -> invalid_arg "interpret_operand: tried to interpret a lable!"
   end
-*)
-
-
 
 (* Simulates one step of the machine:
     - fetch the instruction at %rip
