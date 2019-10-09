@@ -137,22 +137,13 @@ let sbytes_of_data : data -> sbyte list = function
 let debug_simulator = ref false
 
 (* Interpret a condition code with respect to the given flags. *)
-let interp_cnd {fo; fs; fz} : cnd -> bool =
-  fun x -> begin match x with
-    |Eq -> if fz then true
-      else false
-    |Neq -> if not fz then true
-      else false
-    |Gt -> if (not fz) && (fo == fs) then true
-      else false
-    |Ge -> if fs == fo then true
-      else false
-    |Lt -> if fo != fs then true
-      else false
-    |Le -> if (fo != fs) || fz then true
-      else false
-  end
-        
+let interp_cnd {fo; fs; fz} : cnd -> bool = function
+  | Eq -> if fz then true else false
+  | Neq -> if not fz then true else false
+  | Lt -> if fs <> fo then true else false
+  | Le -> if (fs <> fo) || fz then true else false
+  | Gt -> if (fs = fo) && (not fz) then true else false
+  | Ge -> if (fs = fo) then true else false
 
 
 (* Maps an X86lite address into Some OCaml array index,
@@ -163,28 +154,28 @@ let map_addr (addr:quad) : int option =
 
 
 
-let rec interpret_operand (op:operand) (mach:mach): int64 = 
- begin match op with
-   |Imm x -> begin match x with
-     |Lit x -> x
-     |Lbl x -> Int64.of_int 1 
-   end
-   |Reg x -> Array.get mach.regs (rind x)
-   |Ind1 x -> interpret_operand (Imm x) mach 
-   |Ind2 x -> let addr = map_addr(interpret_operand (Reg x) mach) in 
-     begin match addr with
-       |Some x -> int64_of_sbytes [Array.get mach.mem x]
-       |None -> Int64.of_int 1
-     end
-   |Ind3 (imm, reg) -> 
-     let v1 = interpret_operand(Reg reg) mach in
-     let v2 = interpret_operand(Imm imm) mach in 
-     let addr = map_addr(Int64.add v1 v2) in
-     begin match addr with
-       |Some x -> int64_of_sbytes [Array.get mach.mem x]
-       |None -> Int64.of_int 1
-     end
-   end
+
+let mem_read (m:mem) (addr:quad) : int64 =
+  let check = function
+    | Some x ->  x
+    | None -> raise X86lite_segfault
+  in 
+  let read_quad = 
+    Array.sub m (check (map_addr addr)) 8 
+  in
+  int64_of_sbytes (Array.to_list read_quad)
+
+let interpret_operand (m:mach) (op:operand) : int64 =
+        
+  begin match op with
+    | Imm (Lit x) -> x 
+    | Reg x -> Array.get m.regs (rind x)
+    | Ind1 (Lit x) -> mem_read m.mem x
+    | Ind2 x -> mem_read m.mem (Array.get m.regs (rind x))
+    | Ind3 (Lit offset, reg) -> mem_read m.mem (Int64.add (Array.get m.regs (rind reg)) offset )
+    | _ -> invalid_arg "interpret_operand: tried to interpret a lable!"
+  end
+
 
 
 
@@ -195,8 +186,70 @@ let rec interpret_operand (op:operand) (mach:mach): int64 =
     - update the registers and/or memory appropriately
     - set the condition flags
 *)
-let step (m:mach) : unit =
-  failWith "step unimplemented"
+  
+              
+        
+let get_rip (m:mach) : ins =         
+  let rip = map_addr(Array.get m.regs (rind Rip))
+  in begin match rip with
+    |Some x -> let sbytes = Array.get m.mem x
+    in begin match sbytes with
+      |InsB0 ins -> ins
+      |InsFrag -> invalid_arg "rip not an instruction"
+      |Byte byte -> invalid_arg "rip not an instruction"
+    end
+    |None -> invalid_arg "rip not in address space"
+  end
+
+let interpret_arith (op:opcode) (src:int64) (dest:int64) : int64 = 
+  begin match op with
+    |Addq -> Int64.add src dest
+    |Subq -> Int64.sub src dest
+    |_ -> failwith "Not yet implemented"
+  end
+
+let write_mem (m:mach) (dest:int64) (value:int64) : unit = 
+  let dest = map_addr dest in
+  begin match dest with
+    |Some dest -> Array.set m.mem dest (List.hd (sbytes_of_int64 value))
+    |None -> invalid_arg "Address not in memory"
+  end
+
+let step (m:mach) : unit = 
+  let rip = get_rip m in
+  begin match rip with
+    |(Movq, src::dest::_) -> Printf.printf "Movq"
+    |(Pushq, src::_) -> Printf.printf "Pushq"
+    |(Popq, dest::_) -> Printf.printf "Popq"
+    |(Leaq, ind::dest::_) -> Printf.printf "Leaq"
+    |(Incq, src::_) -> Printf.printf "Incq"
+    |(Decq, src::_) -> Printf.printf "Decq"
+    |(Negq, dest::_) -> Printf.printf "Negq"
+    |(Notq, dest::_) -> Printf.printf "Notq"
+    |(Addq, src::dest::_) -> 
+      let res = interpret_arith Addq (interpret_operand m src) (interpret_operand m dest)
+      in begin match dest with
+        |Reg x -> Array.set m.regs (rind x) res
+        |_ -> write_mem m (interpret_operand m dest) res 
+      end
+    |(Subq, src::dest::_) ->
+      let res = interpret_arith Subq (interpret_operand m src) (interpret_operand m dest)
+      in Printf.printf "Made subtraction"
+    |(Imulq, src::reg::_) -> Printf.printf "Imulq"
+    |(Xorq, src::dest::_) -> Printf.printf "Xorq"
+    |(Orq, src::dest::_) -> Printf.printf "Orq"
+    |(Andq, src::dest::_) -> Printf.printf "Andq"
+    |(Shlq, amt::dest::_) -> Printf.printf "Shlq"
+    |(Sarq, amt::dest::_) -> Printf.printf "Sarq"
+    |(Shrq, amt::dest::_) -> Printf.printf "Shrq"
+    |(Jmp, src::_) -> Printf.printf "Jmp"
+    |(J cc, src::_) -> Printf.printf "J"
+    |(Cmpq, src1::src2::_) -> Printf.printf "Cmpq"
+    |(Set cc, dest::_) -> Printf.printf "Set"
+    |(Callq, src::_) -> Printf.printf "Callq"
+    |(Retq, _) -> Printf.printf "Retq"
+    |_ -> invalid_arg "rip not an instruction"
+  end
 
 (* Runs the machine until the rip register reaches a designated
    memory address. *)
