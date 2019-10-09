@@ -138,12 +138,12 @@ let debug_simulator = ref false
 
 (* Interpret a condition code with respect to the given flags. *)
 let interp_cnd {fo; fs; fz} : cnd -> bool = function
-  | Eq -> if fz then true else false
-  | Neq -> if not fz then true else false
-  | Lt -> if fs <> fo then true else false
-  | Le -> if (fs <> fo) || fz then true else false
-  | Gt -> if (fs = fo) && (not fz) then true else false
-  | Ge -> if (fs = fo) then true else false
+  | Eq -> fz
+  | Neq -> not fz
+  | Lt -> fs <> fo
+  | Le -> (fs <> fo) || fz
+  | Gt -> (fs = fo) && (not fz)
+  | Ge -> (fs = fo)
 
 
 (* Maps an X86lite address into Some OCaml array index,
@@ -154,7 +154,8 @@ let map_addr (addr:quad) : int option =
 
 
 
-let rec interpret_operand (op:operand) (mach:mach): int64 = 
+(*
+ let rec interpret_operand (op:operand) (mach:mach): int64 = 
  begin match op with
    |Imm x -> begin match x with
      |Lit x -> x
@@ -175,28 +176,54 @@ let rec interpret_operand (op:operand) (mach:mach): int64 =
        |Some x -> int64_of_sbytes [Array.get mach.mem x]
        |None -> Int64.of_int 1
      end
-   end
+   end 
+*)
 
 
-let mem_read (m:mem) (addr:quad) : int64 =
-  let check = function
-    | Some x ->  x
-    | None -> raise X86lite_segfault
-  in 
+let mem_check : int option -> int = function
+   | Some x -> x
+   | None -> raise X86lite_segfault
+
+let mem_load (m:mem) (addr:quad) : int64 =
   let read_quad = 
-    Array.sub m (check (map_addr addr)) 8 
+    Array.sub m (mem_check (map_addr addr)) 8 
   in
   int64_of_sbytes (Array.to_list read_quad)
 
 let interpret_operand (m:mach) (op:operand) : int64 =
-  begin match op with
+  match op with
     | Imm (Lit x) -> x 
-    | Reg x -> Array.get m.regs (rind x)
-    | Ind1 (Lit x) -> mem_read m.mem x
-    | Ind2 x -> mem_read m.mem (Array.get m.regs (rind x))
-    | Ind3 (Lit offset, reg) -> mem_read m.mem (Int64.add (Array.get m.regs (rind reg)) offset )
+    | Reg x -> m.regs.(rind x)
+    | Ind1 (Lit x) -> mem_load m.mem x
+    | Ind2 x -> mem_load m.mem (m.regs.(rind x))
+    | Ind3 (Lit offset, reg) -> mem_load m.mem (Int64.add (m.regs.(rind reg)) offset )
     | _ -> invalid_arg "interpret_operand: tried to interpret a lable!"
-  end
+
+let interpret_arith (m:mach) (i:ins) : unit = failwith "unimplemented"
+
+let interpret_log (m:mach) (i:ins) : unit = failwith "unimplemented"
+
+let interpret_bit (m:mach) (i:ins) : unit = failwith "unimplemented"
+
+let interpret_data (m:mach) (i:ins) : unit = failwith "unimplemented"
+
+let interpret_control (m:mach) (i:ins) : unit = failwith "unimplemented"
+
+let interpret_instr (m:mach) ((instr, op):ins) : unit =
+  match instr with
+    | Negq | Addq | Subq | Imulq | Incq | Decq -> interpret_arith m (instr, op)
+    | Notq | Andq | Orq | Xorq -> interpret_log m (instr, op)
+    | Sarq | Shlq | Shrq -> interpret_bit m (instr, op)
+    | Leaq | Movq | Pushq | Popq -> interpret_data m (instr, op)
+    | Cmpq | Jmp | Callq | Retq -> interpret_control m (instr, op)
+    | Set x | J x -> failwith "unimplemented"
+   
+
+let eval_sbyte (m:mach) (s:sbyte) : unit = 
+  match s with
+    | InsB0 x -> interpret_instr m x 
+    | InsFrag -> m.regs.(rind Rip) <- Int64.add m.regs.(rind Rip) Int64.one
+    | Byte x -> m.regs.(rind Rip) <- Int64.add m.regs.(rind Rip) Int64.one
 
 (* Simulates one step of the machine:
     - fetch the instruction at %rip
@@ -204,9 +231,14 @@ let interpret_operand (m:mach) (op:operand) : int64 =
     - simulate the instruction semantics
     - update the registers and/or memory appropriately
     - set the condition flags
-*)
+    *)
+
 let step (m:mach) : unit =
-  failwith "step unimplemented"
+  let instr_addr = m.regs.(rind Rip) in
+  let index = mem_check (map_addr instr_addr) in
+  eval_sbyte m m.mem.(index)
+
+
 
 (* Runs the machine until the rip register reaches a designated
    memory address. *)
