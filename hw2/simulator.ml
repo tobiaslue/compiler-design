@@ -134,7 +134,7 @@ let sbytes_of_data : data -> sbyte list = function
 
 (* It might be useful to toggle printing of intermediate states of your 
    simulator. *)
-let debug_simulator = ref false
+let debug_simulator = ref true
 
 (* Interpret a condition code with respect to the given flags. *)
 let interp_cnd {fo; fs; fz} : cnd -> bool = function
@@ -156,17 +156,22 @@ let map_addr (addr:quad) : int option =
 
 
 let mem_read (m:mem) (addr:quad) : int64 =
-  let check = function
+  let addr_map = map_addr addr in
+  begin match addr_map with
+    |Some x -> int64_of_sbytes [Array.get m x]
+    |None -> raise X86lite_segfault
+  end
+        
+    (*    let check = function
     | Some x ->  x
     | None -> raise X86lite_segfault
   in 
   let read_quad = 
-    Array.sub m (check (map_addr addr)) 8 
+    Array.get m (check (map_addr addr)) 
   in
-  int64_of_sbytes (Array.to_list read_quad)
+  int64_of_sbytes (Array.to_list read_quad)*)
 
-let interpret_operand (m:mach) (op:operand) : int64 =
-        
+let interpret_operand (m:mach) (op:operand) : int64 =      
   begin match op with
     | Imm (Lit x) -> x 
     | Reg x -> Array.get m.regs (rind x)
@@ -201,47 +206,76 @@ let get_rip (m:mach) : ins =
     |None -> invalid_arg "rip not in address space"
   end
 
-let interpret_arith (op:opcode) (src:int64) (dest:int64) : int64 = 
+
+(*Update all 8 bytes of a memory location, otherwise the result will be wrong.*)
+let write_mem (m:mach) (dest:int64) (value:int64) = 
+  let dest = map_addr dest in
+  begin match dest with
+    |Some dest -> Array.set m.mem dest (List.hd (sbytes_of_int64 value));Printf.printf "write_mem to %d value %d" dest (Int64.to_int value)
+    |None -> invalid_arg "Address not in memory";
+  end
+
+let write_res (m:mach) (dest:operand) (value:int64) = 
+  begin match dest with
+    |Reg x -> m.regs.(rind x) <- value;Printf.printf "res %d" (Int64.to_int value)
+    |Ind1 (Lit x) -> write_mem m x value
+    |Ind2 x -> write_mem m m.regs.(rind x) value
+    |Ind3 ((Lit off), reg) -> write_mem m (Int64.add m.regs.(rind reg) off) value;Printf.printf "res %d" (Int64.to_int value);Printf.printf "off %d" (Int64.to_int off);Printf.printf "addr %d" (Int64.to_int (int64_of_sbytes([Array.get m.mem 65528])))
+    |_ -> invalid_arg "can not write to this address"
+  end
+ 
+let increment_rip (m:mach) = 
+  let rip = m.regs.(rind Rip)
+  in let new_rip = Int64.add rip 8L
+  in m.regs.(rind Rip) <- new_rip
+
+let sim_bin_op (m:mach) (op:opcode) (src:operand) (dest:operand) = 
+  let src_int = interpret_operand m src in
+  let dest_int = interpret_operand m dest in 
   begin match op with
-    |Addq -> Int64.add src dest
-    |Subq -> Int64.sub src dest
+    |Movq -> let res = src_int in write_res m dest res; increment_rip m
+    |Addq -> let res = Int64.add dest_int src_int in write_res m dest res; increment_rip m
+    |Subq -> let res = Int64.sub dest_int src_int in write_res m dest res; increment_rip m
+    |Xorq -> let res = Int64.logxor src_int dest_int in write_res m dest res
+    |Orq -> let res = Int64.logor src_int dest_int in write_res m dest res
+    |Andq -> let res = Int64.logand src_int dest_int in write_res m dest res
+    |Imulq -> let res = Int64.mul src_int dest_int in write_res m dest res
+    |Shlq -> let res = Int64.shift_left dest_int (Int64.to_int src_int) in write_res m dest res
+    |Sarq -> let res = Int64.shift_right dest_int (Int64.to_int src_int) in write_res m dest res
+    |Shrq -> let res = Int64.shift_right_logical dest_int (Int64.to_int src_int) in write_res m dest res
     |_ -> failwith "Not yet implemented"
   end
 
-let write_mem (m:mach) (dest:int64) (value:int64) : unit = 
-  let dest = map_addr dest in
-  begin match dest with
-    |Some dest -> Array.set m.mem dest (List.hd (sbytes_of_int64 value))
-    |None -> invalid_arg "Address not in memory"
+let sim_un_op (m:mach) (op:opcode) (src:operand) =
+  let src_int = interpret_operand m src in
+  begin match op with
+    |Incq -> let res = Int64.add src_int 1L in write_res m src res
+    |Decq -> let res = Int64.sub src_int 1L in write_res m src res
+    |Negq -> let res = Int64.neg src_int in write_res m src res
+    |Notq -> let res = Int64.lognot src_int in write_res m src res
+    |_ -> failwith "wrong opcode"
   end
 
 let step (m:mach) : unit = 
   let rip = get_rip m in
   begin match rip with
-    |(Movq, src::dest::_) -> Printf.printf "Movq"
+    |(Movq, src::dest::_) -> sim_bin_op m Movq src dest
     |(Pushq, src::_) -> Printf.printf "Pushq"
     |(Popq, dest::_) -> Printf.printf "Popq"
-    |(Leaq, ind::dest::_) -> Printf.printf "Leaq"
-    |(Incq, src::_) -> Printf.printf "Incq"
-    |(Decq, src::_) -> Printf.printf "Decq"
-    |(Negq, dest::_) -> Printf.printf "Negq"
-    |(Notq, dest::_) -> Printf.printf "Notq"
-    |(Addq, src::dest::_) -> 
-      let res = interpret_arith Addq (interpret_operand m src) (interpret_operand m dest)
-      in begin match dest with
-        |Reg x -> Array.set m.regs (rind x) res
-        |_ -> write_mem m (interpret_operand m dest) res 
-      end
-    |(Subq, src::dest::_) ->
-      let res = interpret_arith Subq (interpret_operand m src) (interpret_operand m dest)
-      in Printf.printf "Made subtraction"
-    |(Imulq, src::reg::_) -> Printf.printf "Imulq"
-    |(Xorq, src::dest::_) -> Printf.printf "Xorq"
-    |(Orq, src::dest::_) -> Printf.printf "Orq"
-    |(Andq, src::dest::_) -> Printf.printf "Andq"
-    |(Shlq, amt::dest::_) -> Printf.printf "Shlq"
-    |(Sarq, amt::dest::_) -> Printf.printf "Sarq"
-    |(Shrq, amt::dest::_) -> Printf.printf "Shrq"
+    |(Leaq, ind::dest::_) -> Printf.printf "Leaq" 
+    |(Incq, src::_) -> sim_un_op m Incq src
+    |(Decq, src::_) -> sim_un_op m Decq src
+    |(Negq, dest::_) -> sim_un_op m Negq dest
+    |(Notq, dest::_) -> sim_un_op m Notq dest
+    |(Addq, src::dest::_) -> sim_bin_op m Addq src dest
+    |(Subq, src::dest::_) -> sim_bin_op m Subq src dest
+    |(Imulq, src::reg::_) -> sim_bin_op m Imulq src reg
+    |(Xorq, src::dest::_) -> sim_bin_op m Xorq src dest
+    |(Orq, src::dest::_) -> sim_bin_op m Orq src dest
+    |(Andq, src::dest::_) -> sim_bin_op m Andq src dest
+    |(Shlq, amt::dest::_) -> sim_bin_op m Shlq amt dest
+    |(Sarq, amt::dest::_) -> sim_bin_op m Sarq amt dest
+    |(Shrq, amt::dest::_) -> sim_bin_op m Shrq amt dest
     |(Jmp, src::_) -> Printf.printf "Jmp"
     |(J cc, src::_) -> Printf.printf "J"
     |(Cmpq, src1::src2::_) -> Printf.printf "Cmpq"
