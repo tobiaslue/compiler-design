@@ -190,7 +190,20 @@ let mem_load (m:mem) (addr:quad) : int64 =
   in
   int64_of_sbytes (Array.to_list read_quad)
 
-let interpret_operand (m:mach) (op:operand) : int64 =
+let mem_store (m:mem) (addr:quad) (v:int64) : unit = failwith "unimplemented"
+
+let store_data (m:mach) (op:operand) (v:int64) : unit =
+  match op with
+    | Reg x -> m.regs.(rind x) <- v
+    | Ind1 (Lit x) -> mem_store m.mem x v
+    | Ind2 x -> mem_store m.mem (m.regs.(rind x)) v
+    | Ind3 (Lit offset, reg) -> mem_store m.mem (Int64.add (m.regs.(rind reg)) offset ) v
+    | _ -> invalid_arg "store_data: tried to store to invalid operand"
+
+let set_flags (m:mach) (res:Int64_overflow.t) = failwith "unimplemented"
+
+let interpret_operand (m:mach) (ops:operand list) (i:int): int64 =
+  let op = List.nth ops i in
   match op with
     | Imm (Lit x) -> x 
     | Reg x -> m.regs.(rind x)
@@ -199,24 +212,31 @@ let interpret_operand (m:mach) (op:operand) : int64 =
     | Ind3 (Lit offset, reg) -> mem_load m.mem (Int64.add (m.regs.(rind reg)) offset )
     | _ -> invalid_arg "interpret_operand: tried to interpret a lable!"
 
-let interpret_arith (m:mach) (i:ins) : unit = failwith "unimplemented"
+let interpret_arith (m:mach) (i:opcode) (ops:operand list) : unit = 
+  match i with
+    | Addq -> let src = interpret_operand m ops 0 in
+              let dest = interpret_operand m ops 1 in
+              let res = Int64_overflow.add src dest in
+                store_data m (List.nth ops 1) res.Int64_overflow.value;
+                (*set_flags m res*)
+    | _ -> failwith "unimplemented"
 
-let interpret_log (m:mach) (i:ins) : unit = failwith "unimplemented"
+let interpret_log (m:mach) (i:opcode) (ops:operand list): unit = failwith "unimplemented"
 
-let interpret_bit (m:mach) (i:ins) : unit = failwith "unimplemented"
+let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
 
-let interpret_data (m:mach) (i:ins) : unit = failwith "unimplemented"
+let interpret_data (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
 
-let interpret_control (m:mach) (i:ins) : unit = failwith "unimplemented"
+let interpret_control (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
 
 let interpret_instr (m:mach) ((instr, op):ins) : unit =
   match instr with
-    | Negq | Addq | Subq | Imulq | Incq | Decq -> interpret_arith m (instr, op)
-    | Notq | Andq | Orq | Xorq -> interpret_log m (instr, op)
-    | Sarq | Shlq | Shrq -> interpret_bit m (instr, op)
-    | Leaq | Movq | Pushq | Popq -> interpret_data m (instr, op)
-    | Cmpq | Jmp | Callq | Retq -> interpret_control m (instr, op)
-    | Set x | J x -> failwith "unimplemented"
+    | Negq | Addq | Subq | Imulq | Incq | Decq -> interpret_arith m instr op
+    | Notq | Andq | Orq | Xorq -> interpret_log m instr op
+    | Sarq | Shlq | Shrq -> interpret_bit m instr op
+    | Leaq | Movq | Pushq | Popq -> interpret_data m instr op
+    | Cmpq | Jmp | Callq | Retq -> interpret_control m instr op
+    | Set _ | J _ -> failwith "unimplemented"
    
 
 let eval_sbyte (m:mach) (s:sbyte) : unit = 
