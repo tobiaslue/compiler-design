@@ -328,7 +328,7 @@ let instruction_tests = [
     (fun m -> m.regs.(rind Rip) = 16L)
   );
 
-  ("j", machine_test "rip = 12" 4 jmp
+  ("j", machine_test "rip = 12" 4 j
     (fun m -> m.regs.(rind Rip) = 12L
            && m.regs.(rind Rax) = 4L
            && m.regs.(rind Rbx) = 4L
