@@ -134,7 +134,7 @@ let sbytes_of_data : data -> sbyte list = function
 
 (* It might be useful to toggle printing of intermediate states of your 
    simulator. *)
-let debug_simulator = ref false
+let debug_simulator = ref true
 
 (* Interpret a condition code with respect to the given flags. *)
 let interp_cnd {fo; fs; fz} : cnd -> bool = function
@@ -152,33 +152,8 @@ let map_addr (addr:quad) : int option =
   if (addr < mem_bot) || (addr > mem_top) then None
   else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
 
-
-
-(*
- let rec interpret_operand (op:operand) (mach:mach): int64 = 
- begin match op with
-   |Imm x -> begin match x with
-     |Lit x -> x
-     |Lbl x -> Int64.of_int 1 
-   end
-   |Reg x -> Array.get mach.regs (rind x)
-   |Ind1 x -> interpret_operand (Imm x) mach 
-   |Ind2 x -> let addr = map_addr(interpret_operand (Reg x) mach) in 
-     begin match addr with
-       |Some x -> int64_of_sbytes [Array.get mach.mem x]
-       |None -> Int64.of_int 1
-     end
-   |Ind3 (imm, reg) -> 
-     let v1 = interpret_operand(Reg reg) mach in
-     let v2 = interpret_operand(Imm imm) mach in 
-     let addr = map_addr(Int64.add v1 v2) in
-     begin match addr with
-       |Some x -> int64_of_sbytes [Array.get mach.mem x]
-       |None -> Int64.of_int 1
-     end
-   end 
-*)
-
+let incr_rip (m:mach) = 
+  m.regs.(rind Rip) <- Int64.add m.regs.(rind Rip) 8L
 
 let mem_check : int option -> int = function
    | Some x -> x
@@ -190,7 +165,17 @@ let mem_load (m:mem) (addr:quad) : int64 =
   in
   int64_of_sbytes (Array.to_list read_quad)
 
-let mem_store (m:mem) (addr:quad) (v:int64) : unit = failwith "unimplemented"
+let mem_store (m:mem) (addr:quad) (v:int64) : unit = 
+  let dest = mem_check (map_addr addr) in
+  let data = sbytes_of_int64 v in
+  m.(dest) <- List.nth data 0;
+  m.(dest + 1) <- List.nth data 1;
+  m.(dest + 2) <- List.nth data 2;
+  m.(dest + 3) <- List.nth data 3;
+  m.(dest + 4) <- List.nth data 4;
+  m.(dest + 5) <- List.nth data 5;
+  m.(dest + 6) <- List.nth data 6;
+  m.(dest + 7) <- List.nth data 7
 
 let store_data (m:mach) (op:operand) (v:int64) : unit =
   match op with
@@ -200,7 +185,15 @@ let store_data (m:mach) (op:operand) (v:int64) : unit =
     | Ind3 (Lit offset, reg) -> mem_store m.mem (Int64.add (m.regs.(rind reg)) offset ) v
     | _ -> invalid_arg "store_data: tried to store to invalid operand"
 
-let set_flags (m:mach) (res:Int64_overflow.t) = failwith "unimplemented"
+let set_flags (m:mach) (res:Int64_overflow.t) = 
+  m.flags.fo <- res.Int64_overflow.overflow;
+  m.flags.fs <- (res.Int64_overflow.value < 0L);
+  m.flags.fz <- (res.Int64_overflow.value = 0L);
+  Printf.printf "Addq: res -> %d flags -> fo = %b, fs= %b, fz = %b\n"
+    (Int64.to_int res.Int64_overflow.value)
+    m.flags.fo
+    m.flags.fs
+    m.flags.fz
 
 let interpret_operand (m:mach) (ops:operand list) (i:int): int64 =
   let op = List.nth ops i in
@@ -214,34 +207,42 @@ let interpret_operand (m:mach) (ops:operand list) (i:int): int64 =
 
 let interpret_arith (m:mach) (i:opcode) (ops:operand list) : unit = 
   match i with
+    | Negq -> let dest = interpret_operand m ops 0 in
+              let res = Int64_overflow.neg dest in
+                store_data m (List.nth ops 0) res.Int64_overflow.value;
+                set_flags m res
     | Addq -> let src = interpret_operand m ops 0 in
               let dest = interpret_operand m ops 1 in
               let res = Int64_overflow.add src dest in
                 store_data m (List.nth ops 1) res.Int64_overflow.value;
-                (*set_flags m res*)
+                set_flags m res
     | _ -> failwith "unimplemented"
 
 let interpret_log (m:mach) (i:opcode) (ops:operand list): unit = failwith "unimplemented"
 
 let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
 
-let interpret_data (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
+let interpret_data (m:mach) (i:opcode) (ops:operand list) : unit = 
+  match i with
+    | Movq -> let src = interpret_operand m ops 0 in
+                store_data m (List.nth ops 1) src
+    | _ -> failwith "unimplemented"
 
 let interpret_control (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
 
 let interpret_instr (m:mach) ((instr, op):ins) : unit =
   match instr with
-    | Negq | Addq | Subq | Imulq | Incq | Decq -> interpret_arith m instr op
-    | Notq | Andq | Orq | Xorq -> interpret_log m instr op
-    | Sarq | Shlq | Shrq -> interpret_bit m instr op
-    | Leaq | Movq | Pushq | Popq -> interpret_data m instr op
+    | Negq | Addq | Subq | Imulq | Incq | Decq -> interpret_arith m instr op; incr_rip m
+    | Notq | Andq | Orq | Xorq -> interpret_log m instr op; incr_rip m
+    | Sarq | Shlq | Shrq -> interpret_bit m instr op; incr_rip m
+    | Leaq | Movq | Pushq | Popq -> interpret_data m instr op; incr_rip m;
     | Cmpq | Jmp | Callq | Retq -> interpret_control m instr op
     | Set _ | J _ -> failwith "unimplemented"
    
 
 let eval_sbyte (m:mach) (s:sbyte) : unit = 
   match s with
-    | InsB0 x -> interpret_instr m x 
+    | InsB0 x -> interpret_instr m x;
     | InsFrag -> m.regs.(rind Rip) <- Int64.add m.regs.(rind Rip) Int64.one
     | Byte x -> m.regs.(rind Rip) <- Int64.add m.regs.(rind Rip) Int64.one
 
