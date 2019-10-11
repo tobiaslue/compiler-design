@@ -226,6 +226,11 @@ let mov_mr = test_machine
   [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
   ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag]
 
+let addq = test_machine
+    [InsB0 (Addq, [~$5; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
+    ;InsB0 (Addq, [~%Rax; ~%Rbx]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
+    ;InsB0 (Addq, [~%Rbx; stack_offset 0L]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag]
+
 
 let subq = test_machine
     [InsB0 (Subq, [~$1; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
@@ -278,6 +283,16 @@ let popq = test_machine
     ;InsB0 (Popq, [~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
     ]
 
+let j = test_machine
+    [InsB0 (Movq, [~$4; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
+    ;InsB0 (Movq, [~$4; ~%Rbx]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
+    ;InsB0 (Cmpq, [~%Rax; ~%Rbx]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
+    ;InsB0 (J Eq, [~$12]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
+    ]
+
+let jmp = test_machine 
+    [InsB0 (Jmp, [~$16]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag]
+
 let cmpq = test_machine
     [InsB0 (Movq, [~$4; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
     ;InsB0 (Movq, [~$2; stack_offset 0L]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag
@@ -294,12 +309,32 @@ let instruction_tests = [
   ("mov_mr", machine_test "*65520=42" 2 mov_mr
     (fun m -> int64_of_sbytes (sbyte_list m.mem (mem_size-16)) = 42L)
   );
+
+  ("addq", machine_test "rax=*65528=5L; rbx=5" 3 addq
+    (fun m -> m.regs.(rind Rax) = 5L
+           && m.regs.(rind Rbx) = 5L
+           && int64_of_sbytes (sbyte_list m.mem (mem_size-8)) = 5L
+    )
+  );
+
   ("subq", machine_test "rax=*65528=-1L; rbx=1" 3 subq
     (fun m -> m.regs.(rind Rax) = (Int64.neg 1L)
            && m.regs.(rind Rbx) = 1L
            && int64_of_sbytes (sbyte_list m.mem (mem_size-8)) = (Int64.neg 1L)
     )
   );
+
+  ("jmp", machine_test "rip = 12" 1 jmp
+    (fun m -> m.regs.(rind Rip) = 16L)
+  );
+
+  ("j", machine_test "rip = 12" 4 jmp
+    (fun m -> m.regs.(rind Rip) = 12L
+           && m.regs.(rind Rax) = 4L
+           && m.regs.(rind Rbx) = 4L
+    )
+  );
+
   ("andq", machine_test "rax=2 rbx=2 rcx=1 *65528=1" 8 andq
     (fun m -> m.regs.(rind Rax) = 2L
            && m.regs.(rind Rbx) = 2L

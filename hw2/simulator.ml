@@ -158,7 +158,7 @@ let map_addr (addr:quad) : int option =
 let mem_read (m:mem) (addr:quad) : int64 =
   let addr_map = map_addr addr in
   begin match addr_map with
-    |Some x -> int64_of_sbytes [Array.get m x]
+    |Some x -> int64_of_sbytes (Array.to_list (Array.sub m x 8))
     |None -> raise X86lite_segfault
   end
         
@@ -193,7 +193,17 @@ let interpret_operand (m:mach) (op:operand) : int64 =
 *)
   
               
-        
+let set_flags (m:mach) (res:Int64_overflow.t) = 
+  m.flags.fo <- res.Int64_overflow.overflow;
+  m.flags.fs <- (res.Int64_overflow.value < 0L);
+  m.flags.fz <- (res.Int64_overflow.value = 0L)
+
+let set_flags_log (m:mach) (res:int64) =
+  m.flags.fo <- false;
+  m.flags.fs <- res < Int64.zero;
+  m.flags.fz <- res = Int64.zero
+
+      
 let get_rip (m:mach) : ins =         
   let rip = map_addr(Array.get m.regs (rind Rip))
   in begin match rip with
@@ -210,17 +220,26 @@ let get_rip (m:mach) : ins =
 (*Update all 8 bytes of a memory location, otherwise the result will be wrong.*)
 let write_mem (m:mach) (dest:int64) (value:int64) = 
   let dest = map_addr dest in
+  let data = sbytes_of_int64 value in 
   begin match dest with
-    |Some dest -> Array.set m.mem dest (List.hd (sbytes_of_int64 value));Printf.printf "write_mem to %d value %d" dest (Int64.to_int value)
+    |Some dest -> 
+      m.mem.(dest) <- List.nth data 0;
+      m.mem.(dest + 1) <- List.nth data 1;
+      m.mem.(dest + 2) <- List.nth data 2;      
+      m.mem.(dest + 3) <- List.nth data 3;                           
+      m.mem.(dest + 4) <- List.nth data 4;
+      m.mem.(dest + 5) <- List.nth data 5;
+      m.mem.(dest + 6) <- List.nth data 6;
+      m.mem.(dest + 7) <- List.nth data 7;
     |None -> invalid_arg "Address not in memory";
   end
 
 let write_res (m:mach) (dest:operand) (value:int64) = 
   begin match dest with
-    |Reg x -> m.regs.(rind x) <- value;Printf.printf "res %d" (Int64.to_int value)
+    |Reg x -> m.regs.(rind x) <- value
     |Ind1 (Lit x) -> write_mem m x value
     |Ind2 x -> write_mem m m.regs.(rind x) value
-    |Ind3 ((Lit off), reg) -> write_mem m (Int64.add m.regs.(rind reg) off) value;Printf.printf "res %d" (Int64.to_int value);Printf.printf "off %d" (Int64.to_int off);Printf.printf "addr %d" (Int64.to_int (int64_of_sbytes([Array.get m.mem 65528])))
+    |Ind3 ((Lit off), reg) -> write_mem m (Int64.add m.regs.(rind reg) off) value
     |_ -> invalid_arg "can not write to this address"
   end
  
@@ -233,26 +252,55 @@ let sim_bin_op (m:mach) (op:opcode) (src:operand) (dest:operand) =
   let src_int = interpret_operand m src in
   let dest_int = interpret_operand m dest in 
   begin match op with
-    |Movq -> let res = src_int in write_res m dest res; increment_rip m
-    |Addq -> let res = Int64.add dest_int src_int in write_res m dest res; increment_rip m
-    |Subq -> let res = Int64.sub dest_int src_int in write_res m dest res; increment_rip m
-    |Xorq -> let res = Int64.logxor src_int dest_int in write_res m dest res
-    |Orq -> let res = Int64.logor src_int dest_int in write_res m dest res
-    |Andq -> let res = Int64.logand src_int dest_int in write_res m dest res
-    |Imulq -> let res = Int64.mul src_int dest_int in write_res m dest res
-    |Shlq -> let res = Int64.shift_left dest_int (Int64.to_int src_int) in write_res m dest res
-    |Sarq -> let res = Int64.shift_right dest_int (Int64.to_int src_int) in write_res m dest res
-    |Shrq -> let res = Int64.shift_right_logical dest_int (Int64.to_int src_int) in write_res m dest res
+    |Movq -> let res = src_int in write_res m dest res; increment_rip m 
+    |Addq -> let res = Int64_overflow.add dest_int src_int in write_res m dest res.value; 
+      increment_rip m; set_flags m res
+    |Subq -> let res = Int64_overflow.sub dest_int src_int in write_res m dest res.value; 
+      increment_rip m; set_flags m res
+    |Xorq -> let res = Int64.logxor src_int dest_int in write_res m dest res; 
+      increment_rip m; set_flags_log m res
+    |Orq -> let res = Int64.logor src_int dest_int in write_res m dest res; 
+      increment_rip m; set_flags_log m res
+    |Andq -> let res = Int64.logand src_int dest_int in write_res m dest res; 
+      increment_rip m; set_flags_log m res
+    |Imulq -> let res = Int64_overflow.mul src_int dest_int in write_res m dest res.value; 
+      increment_rip m; set_flags m res
+    |Shlq -> let res = Int64.shift_left dest_int (Int64.to_int src_int) in write_res m dest res; 
+      increment_rip m; set_flags_log m res
+    |Sarq -> let res = Int64.shift_right dest_int (Int64.to_int src_int) in write_res m dest res;
+      increment_rip m; set_flags_log m res
+    |Shrq -> let res = Int64.shift_right_logical dest_int (Int64.to_int src_int) in write_res m dest res;
+      increment_rip m; set_flags_log m res
+    |Leaq -> write_res m dest src_int; increment_rip m
+    |Cmpq -> let res = Int64_overflow.sub dest_int src_int in increment_rip; set_flags m res
     |_ -> failwith "Not yet implemented"
   end
 
+let decrement_rsp (m:mach) =
+  let rsp = m.regs.(rind Rsp) in
+  let new_rsp = Int64.sub rsp 8L in 
+  m.regs.(rind Rsp) <- new_rsp
+
+let increment_rsp (m:mach) = 
+  let rsp = m.regs.(rind Rsp) in 
+  let new_rsp = Int64.add rsp 8L in
+  m.regs.(rind Rsp) <- new_rsp
+
+ 
 let sim_un_op (m:mach) (op:opcode) (src:operand) =
   let src_int = interpret_operand m src in
   begin match op with
-    |Incq -> let res = Int64.add src_int 1L in write_res m src res
-    |Decq -> let res = Int64.sub src_int 1L in write_res m src res
-    |Negq -> let res = Int64.neg src_int in write_res m src res
-    |Notq -> let res = Int64.lognot src_int in write_res m src res
+    |Incq -> let res = Int64_overflow.add src_int 1L in write_res m src res.value; 
+      increment_rip m; set_flags m res
+    |Decq -> let res = Int64_overflow.sub src_int 1L in write_res m src res.value; 
+      increment_rip m; set_flags m res
+    |Negq -> let res = Int64_overflow.neg src_int in write_res m src res.value; 
+      increment_rip m; set_flags m res
+    |Notq -> let res = Int64.lognot src_int in write_res m src res; 
+      increment_rip m; set_flags_log m res
+    |Pushq -> decrement_rsp m; write_res m (Ind2 Rsp) src_int; increment_rip m 
+    |Popq -> write_res m src (interpret_operand m (Ind2 Rsp)); increment_rsp m; increment_rip m
+    |Jmp -> m.regs.(rind Rip) <- src_int
     |_ -> failwith "wrong opcode"
   end
 
@@ -260,9 +308,9 @@ let step (m:mach) : unit =
   let rip = get_rip m in
   begin match rip with
     |(Movq, src::dest::_) -> sim_bin_op m Movq src dest
-    |(Pushq, src::_) -> Printf.printf "Pushq"
-    |(Popq, dest::_) -> Printf.printf "Popq"
-    |(Leaq, ind::dest::_) -> Printf.printf "Leaq" 
+    |(Pushq, src::_) -> sim_un_op m Pushq src
+    |(Popq, dest::_) -> sim_un_op m Popq dest
+    |(Leaq, ind::dest::_) -> sim_bin_op m Leaq ind dest 
     |(Incq, src::_) -> sim_un_op m Incq src
     |(Decq, src::_) -> sim_un_op m Decq src
     |(Negq, dest::_) -> sim_un_op m Negq dest
@@ -276,12 +324,12 @@ let step (m:mach) : unit =
     |(Shlq, amt::dest::_) -> sim_bin_op m Shlq amt dest
     |(Sarq, amt::dest::_) -> sim_bin_op m Sarq amt dest
     |(Shrq, amt::dest::_) -> sim_bin_op m Shrq amt dest
-    |(Jmp, src::_) -> Printf.printf "Jmp"
-    |(J cc, src::_) -> Printf.printf "J"
-    |(Cmpq, src1::src2::_) -> Printf.printf "Cmpq"
+    |(Jmp, src::_) -> sim_un_op m Jmp src
+    |(J cc, src::_) -> if (interp_cnd m.flags cc) then (sim_un_op m Jmp src) else (increment_rip m)
+    |(Cmpq, src1::src2::_) -> sim_bin_op m Cmpq src1 src2
     |(Set cc, dest::_) -> Printf.printf "Set"
-    |(Callq, src::_) -> Printf.printf "Callq"
-    |(Retq, _) -> Printf.printf "Retq"
+    |(Callq, src::_) -> sim_un_op m Pushq (Reg Rip); sim_un_op m Jmp src
+    |(Retq, _) -> sim_un_op m Popq (Reg Rip) 
     |_ -> invalid_arg "rip not an instruction"
   end
 
