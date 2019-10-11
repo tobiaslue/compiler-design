@@ -187,13 +187,18 @@ let store_data (m:mach) (op:operand) (v:int64) : unit =
 
 let set_flags (m:mach) (res:Int64_overflow.t) = 
   m.flags.fo <- res.Int64_overflow.overflow;
-  m.flags.fs <- (res.Int64_overflow.value < 0L);
-  m.flags.fz <- (res.Int64_overflow.value = 0L);
-  Printf.printf "Addq: res -> %d flags -> fo = %b, fs= %b, fz = %b\n"
+  m.flags.fs <- (res.Int64_overflow.value < Int64.zero);
+  m.flags.fz <- (res.Int64_overflow.value = Int64.zero)
+  (*Printf.printf "Addq: res -> %d flags -> fo = %b, fs= %b, fz = %b\n"
     (Int64.to_int res.Int64_overflow.value)
     m.flags.fo
     m.flags.fs
-    m.flags.fz
+    m.flags.fz*)
+
+let set_flags_log (m:mach) (res:int64) =
+  m.flags.fo <- false;
+  m.flags.fs <- res < Int64.zero;
+  m.flags.fz <- res = Int64.zero
 
 let interpret_operand (m:mach) (ops:operand list) (i:int): int64 =
   let op = List.nth ops i in
@@ -211,14 +216,48 @@ let interpret_arith (m:mach) (i:opcode) (ops:operand list) : unit =
               let res = Int64_overflow.neg dest in
                 store_data m (List.nth ops 0) res.Int64_overflow.value;
                 set_flags m res
+
     | Addq -> let src = interpret_operand m ops 0 in
               let dest = interpret_operand m ops 1 in
               let res = Int64_overflow.add src dest in
                 store_data m (List.nth ops 1) res.Int64_overflow.value;
                 set_flags m res
-    | _ -> failwith "unimplemented"
 
-let interpret_log (m:mach) (i:opcode) (ops:operand list): unit = failwith "unimplemented"
+    | Subq -> let src = interpret_operand m ops 0 in
+              let dest = interpret_operand m ops 1 in
+              let res = Int64_overflow.sub dest src in
+                store_data m (List.nth ops 1) res.Int64_overflow.value;
+                set_flags m res
+
+    | Imulq -> let src = interpret_operand m ops 0 in
+               let dest = interpret_operand m ops 1 in
+               let res = Int64_overflow.mul src dest in
+                 store_data m (List.nth ops 1) res.Int64_overflow.value;
+                 set_flags m res
+              
+    | Incq -> let src = interpret_operand m ops 0 in
+              let res = Int64_overflow.succ src in
+                store_data m (List.nth ops 0) res.Int64_overflow.value;
+                set_flags m res
+              
+    | Decq -> let src = interpret_operand m ops 0 in
+              let res = Int64_overflow.pred src in
+                store_data m (List.nth ops 0) res.Int64_overflow.value;
+                set_flags m res
+    | _ -> invalid_arg "interpret_arith: not an arithmetic instruction"
+
+let interpret_log (m:mach) (i:opcode) (ops:operand list): unit = 
+  match i with
+    | Notq -> let src = interpret_operand m ops 0 in
+              let res = Int64.lognot src in
+                store_data m (List.nth ops 0) res
+
+    | Andq -> let src = interpret_operand m ops 0 in
+              let dest = interpret_operand m ops 1 in
+              let res = Int64.logand src dest in 
+                store_data m (List.nth ops 1) res;
+                set_flags_log m res
+    | _ -> invalid_arg "interpret_log: not a logic instruction"
 
 let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
 
