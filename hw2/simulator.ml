@@ -210,6 +210,14 @@ let interpret_operand (m:mach) (ops:operand list) (i:int): int64 =
     | Ind3 (Lit offset, reg) -> mem_load m.mem (Int64.add (m.regs.(rind reg)) offset )
     | _ -> invalid_arg "interpret_operand: tried to interpret a lable!"
 
+let store_byte (m:mach) (op:operand) (v:int64) : unit =
+  let open Int64 in 
+  match op with
+    | Reg x ->  let old = logand m.regs.(rind x) 0xFFFFFFFFFFFFFF00L in
+                  m.regs.(rind x) <- logor old (logand 0xFFL v)
+    | _ -> failwith ""
+                  
+
 let interpret_arith (m:mach) (i:opcode) (ops:operand list) : unit = 
   match i with
     | Negq -> let dest = interpret_operand m ops 0 in
@@ -257,27 +265,70 @@ let interpret_log (m:mach) (i:opcode) (ops:operand list): unit =
               let res = Int64.logand src dest in 
                 store_data m (List.nth ops 1) res;
                 set_flags_log m res
+    
+    | Orq -> let src = interpret_operand m ops 0 in
+             let dest = interpret_operand m ops 1 in
+             let res = Int64.logor src dest in 
+               store_data m (List.nth ops 1) res;
+               set_flags_log m res
+
+    | Xorq -> let src = interpret_operand m ops 0 in
+              let dest = interpret_operand m ops 1 in
+              let res = Int64.logxor src dest in 
+                store_data m (List.nth ops 1) res;
+                set_flags_log m res
     | _ -> invalid_arg "interpret_log: not a logic instruction"
 
-let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
+let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit = 
+  let amt = Int64.to_int (interpret_operand m ops 0) in
+  let dest = interpret_operand m ops 1 in 
+  match i with
+    | Sarq -> let res = Int64.shift_right dest amt in
+                store_data m (List.nth ops 1) res;
+
+    | Shlq -> let res = Int64.shift_left dest amt in
+                store_data m (List.nth ops 1) res;
+
+    | Shrq -> let res = Int64.shift_right_logical dest amt in
+                store_data m (List.nth ops 1) res;
+
+    | Set cc -> let dest = List.nth ops 0 in
+                  store_byte m dest (if interp_cnd m.flags cc then Int64.one else Int64.zero)
+                      
+    | _ -> invalid_arg "interpret_bit: not a bit-manipultation instruction"
 
 let interpret_data (m:mach) (i:opcode) (ops:operand list) : unit = 
   match i with
+    | Leaq -> failwith "leaq not implemented"
     | Movq -> let src = interpret_operand m ops 0 in
                 store_data m (List.nth ops 1) src
-    | _ -> failwith "unimplemented"
 
-let interpret_control (m:mach) (i:opcode) (ops:operand list) : unit = failwith "unimplemented"
+    | Pushq ->  let src = interpret_operand m ops 0 in
+                  m.regs.(rind Rsp) <- Int64.sub m.regs.(rind Rsp) 8L;
+                  mem_store m.mem m.regs.(rind Rsp) src
+            
+    | Popq -> let data = mem_load m.mem m.regs.(rind Rsp) in
+                store_data m (List.nth ops 0) data;
+                m.regs.(rind Rsp) <- Int64.add m.regs.(rind Rsp) 8L;
+
+    | _ -> failwith "unimplemented"
+    
+
+let interpret_control (m:mach) (i:opcode) (ops:operand list) : unit = 
+  match i with
+    | Cmpq -> let src = interpret_operand m ops 0 in
+              let dest = interpret_operand m ops 1 in
+              let res = Int64_overflow.sub dest src in
+                set_flags m res
+    | _ -> invalid_arg "interpret_control: not a control-flow and condition instruction"
 
 let interpret_instr (m:mach) ((instr, op):ins) : unit =
   match instr with
     | Negq | Addq | Subq | Imulq | Incq | Decq -> interpret_arith m instr op; incr_rip m
     | Notq | Andq | Orq | Xorq -> interpret_log m instr op; incr_rip m
-    | Sarq | Shlq | Shrq -> interpret_bit m instr op; incr_rip m
+    | Sarq | Shlq | Shrq | Set _ -> interpret_bit m instr op; incr_rip m
     | Leaq | Movq | Pushq | Popq -> interpret_data m instr op; incr_rip m;
-    | Cmpq | Jmp | Callq | Retq -> interpret_control m instr op
-    | Set _ | J _ -> failwith "unimplemented"
-   
+    | Cmpq | Jmp | Callq | Retq | J _ -> interpret_control m instr op
 
 let eval_sbyte (m:mach) (s:sbyte) : unit = 
   match s with
