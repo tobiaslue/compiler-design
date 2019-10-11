@@ -177,6 +177,13 @@ let mem_store (m:mem) (addr:quad) (v:int64) : unit =
   m.(dest + 6) <- List.nth data 6;
   m.(dest + 7) <- List.nth data 7
 
+let resolve_ind (m:mach) (op:operand) : int64 = 
+  match op with
+    | Ind1 (Lit x) -> x
+    | Ind2 x -> m.regs.(rind x)
+    | Ind3 (Lit offset, reg) -> Int64.add (m.regs.(rind reg)) offset 
+    | _ -> invalid_arg "resolve_ind: not an ind"
+
 let store_data (m:mach) (op:operand) (v:int64) : unit =
   match op with
     | Reg x -> m.regs.(rind x) <- v
@@ -212,10 +219,17 @@ let interpret_operand (m:mach) (ops:operand list) (i:int): int64 =
 
 let store_byte (m:mach) (op:operand) (v:int64) : unit =
   let open Int64 in 
+  let open Char in
   match op with
     | Reg x ->  let old = logand m.regs.(rind x) 0xFFFFFFFFFFFFFF00L in
                   m.regs.(rind x) <- logor old (logand 0xFFL v)
-    | _ -> failwith ""
+    | Ind1 (Lit x) ->           let dest = mem_check (map_addr x) in
+                                  m.mem.(dest) <- Byte (v |> to_int |> chr)
+    | Ind2 x ->                 let dest = mem_check (map_addr m.regs.(rind x)) in
+                                  m.mem.(dest) <- Byte (v |> to_int |> chr)
+    | Ind3 (Lit offset, reg) -> let dest = mem_check (map_addr (Int64.add (m.regs.(rind reg)) offset )) in
+                                  m.mem.(dest) <- Byte (v |> to_int |> chr)
+    | _ -> invalid_arg "store_byte: tried to store to invalid operand"
                   
 
 let interpret_arith (m:mach) (i:opcode) (ops:operand list) : unit = 
@@ -299,7 +313,9 @@ let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit =
 
 let interpret_data (m:mach) (i:opcode) (ops:operand list) : unit = 
   match i with
-    | Leaq -> failwith "leaq not implemented"
+    | Leaq -> let ind = resolve_ind m (List.nth ops 0) in
+                store_data m (List.nth ops 1) ind
+
     | Movq -> let src = interpret_operand m ops 0 in
                 store_data m (List.nth ops 1) src
 
@@ -319,7 +335,21 @@ let interpret_control (m:mach) (i:opcode) (ops:operand list) : unit =
     | Cmpq -> let src = interpret_operand m ops 0 in
               let dest = interpret_operand m ops 1 in
               let res = Int64_overflow.sub dest src in
-                set_flags m res
+                set_flags m res;
+                incr_rip m;
+
+    | Jmp ->  let src = interpret_operand m ops 0 in
+                m.regs.(rind Rip) <- src
+
+    | Callq ->  let src = interpret_operand m ops 0 in
+                  interpret_data m Pushq [Reg Rip];
+                  m.regs.(rind Rip) <- src
+
+    | Retq -> interpret_data m Popq [Reg Rip]
+
+    | J cc -> let src = interpret_operand m ops 0 in  
+                m.regs.(rind Rip) <- if interp_cnd m.flags cc then src 
+                                                              else Int64.add m.regs.(rind Rip) 8L
     | _ -> invalid_arg "interpret_control: not a control-flow and condition instruction"
 
 let interpret_instr (m:mach) ((instr, op):ins) : unit =
