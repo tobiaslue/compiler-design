@@ -368,8 +368,48 @@ exception Redefined_sym of lbl
 
   HINT: List.fold_left and List.fold_right are your friends.
  *)
+
+
+type ins_block = lbl * (ins list)
+type data_block = lbl * (data list)
+type seg = TextSeg of ins_block list | DataSeg of data_block list
+type symbol_table = (lbl * quad) list 
+
+let get_text (p:prog) : ins_block list = 
+  let f = fun {lbl; global; asm} -> begin match asm with
+    |Text x -> (lbl, x)
+    |Data x -> (lbl, []) 
+  end
+  in List.map f p  
+
+let get_data (p:prog) : data_block list = 
+  let f = fun {lbl; global; asm} -> begin match asm with
+    |Text x -> (lbl, [])
+    |Data x -> (lbl, x) 
+  end
+  in List.map f p 
+
+let get_size (s:seg) : int = 
+  failwith "size no implemented"
+
+let make_symbol_table (text_seg:seg) (data_seg:seg) (text_size:int) (data_size:int) : symbol_table = 
+  failwith "symbol_table not implemented"
+
+let replace_labels (text_seg:seg) (sym_tbl:symbol_table) : ins list =
+  failwith "replace_labels not implemented"
+
 let assemble (p:prog) : exec =
-failwith "assemble unimplemented"
+  let text_seg = get_text p in 
+  let data_seg = get_data p in 
+  let text_size = get_size (TextSeg text_seg) in
+  let data_size = get_size (DataSeg data_seg) in 
+  let sym_tbl = make_symbol_table (TextSeg text_seg) (DataSeg data_seg) text_size data_size in 
+  let ins_seg = replace_labels (TextSeg text_seg) sym_tbl in
+  (*Serialize instruction and data here*)
+  (*Make an exec here*)
+  failwith "not finished"
+
+
 
 (* Convert an object file into an executable machine state. 
     - allocate the mem array
