@@ -368,48 +368,165 @@ exception Redefined_sym of lbl
 
   HINT: List.fold_left and List.fold_right are your friends.
  *)
-
-
-type ins_block = lbl * (ins list)
-type data_block = lbl * (data list)
-type seg = TextSeg of ins_block list | DataSeg of data_block list
+(*
 type symbol_table = (lbl * quad) list 
 
-let get_text (p:prog) : ins_block list = 
-  let f = fun {lbl; global; asm} -> begin match asm with
-    |Text x -> (lbl, x)
-    |Data x -> (lbl, []) 
+let size_of_data (d:data) : int64 =
+  let open Int64 in
+  match d with
+  | Asciz s -> add one (of_int (String.length s))
+  | Quad _ -> 8L
+
+let size_of_elem {lbl; global; asm} : int64 = 
+  match asm with
+  | Text x -> Int64.mul (Int64.of_int (List.length x)) 8L
+  | Data x -> List.fold_left (fun acc y -> Int64.add acc (size_of_data y)) 0L x
+
+
+let make_symbol_table (addr:int64) (p:prog) : symbol_table = 
+  let open Int64 in
+  let open List in
+  let f = fun (base, ls) x -> (add base (size_of_elem x), (x.lbl, base)::ls) in
+  let l = fold_left f (addr, []) p in
+    snd l
+
+let resolve_lbl (lbl:lbl) (sym_tbl:symbol_table) : quad =
+  let entry = List.find (fun (l, addr) -> String.equal lbl l) sym_tbl in
+    snd entry
+
+let lbl_to_lit (lbl:lbl) : lit = 
+  failwith "not implemented"
+
+let replace_lbl_op (op:operand) : operand = 
+  begin match op with
+    |Imm (Lit x) -> Imm (Lit x)
+    |Imm Lbl x -> Imm (Lit (lbl_to_lit x))
+    |Reg x -> Reg x
+    |Ind1 (Lit x) -> Ind1 (Lit x)
+    |Ind1 (Lbl x) -> Ind2 (Lit (lbl_to_lit x))
+    |Ind2 x -> Ind2 x
+    |Ind3 (Lit x, reg) -> Ind3 (Lit x, reg)
+    |Ind3 (Lbl x, reg) -> Ind3 (Lit (lbl_to_lit x), reg)
   end
-  in List.map f p  
 
-let get_data (p:prog) : data_block list = 
-  let f = fun {lbl; global; asm} -> begin match asm with
-    |Text x -> (lbl, [])
-    |Data x -> (lbl, x) 
+let replace_lbl_txt (ins:ins) : ins = 
+  begin match ins with 
+    |(opcode, op1::[]) -> (opcode, (replace_lbl_op op1)::[])
+    |(opcode, op1::op2::[]) -> (opcode, (replace_lbl_op op1)::(repace_lbl_op op2)::[])
+    |(opcode, []) -> (opcode, [])
   end
-  in List.map f p 
 
-let get_size (s:seg) : int = 
-  failwith "size no implemented"
 
-let make_symbol_table (text_seg:seg) (data_seg:seg) (text_size:int) (data_size:int) : symbol_table = 
-  failwith "symbol_table not implemented"
+let get_asm = (asm:asm list) : asm = 
+  begin match asm with
+    |Data x -> List.map replace_lbl_data x
+    |Text x -> List.map preplace_lbl_txt x
+  end
 
-let replace_labels (text_seg:seg) (sym_tbl:symbol_table) : ins list =
-  failwith "replace_labels not implemented"
 
-let assemble (p:prog) : exec =
-  let text_seg = get_text p in 
-  let data_seg = get_data p in 
-  let text_size = get_size (TextSeg text_seg) in
-  let data_size = get_size (DataSeg data_seg) in 
-  let sym_tbl = make_symbol_table (TextSeg text_seg) (DataSeg data_seg) text_size data_size in 
-  let ins_seg = replace_labels (TextSeg text_seg) sym_tbl in
-  (*Serialize instruction and data here*)
-  (*Make an exec here*)
+let translate (p:prog) (sym_tbl:symbol_table) : sbyte list =
+ (* let asm_lsit = (*get asm of every elem in p here*)*)
+  let asm_list = List.map get_asm asm_list in
   failwith "not finished"
+*)
+type symtable = (lbl * quad) list
+
+let find_lbl (lbl:lbl) (sym:symtable) : quad =
+  let entry = List.fold_left (fun acc (l, a) -> if String.equal lbl l then a::acc else acc) [] sym in
+  match entry with
+    | [] -> raise (Undefined_sym lbl)
+    | x::y::xs -> raise (Redefined_sym lbl)
+    | x::xs -> x
+
+let size_of_data (d:data) : int64 =
+  let open Int64 in
+  match d with
+  | Asciz s -> add one (of_int (String.length s))
+  | Quad _ -> 8L
+  
+let size_of_elem {lbl; global; asm} : int64 = 
+  match asm with
+  | Text x -> Int64.mul (Int64.of_int (List.length x)) 8L
+  | Data x -> List.fold_left (fun acc y -> Int64.add acc (size_of_data y)) 0L x
+
+let sbytes_of_asm (asm:asm) (sym:symtable) : sbyte list =
+  let open List in
+  let translate_op op = match op with
+    | Imm (Lbl s) -> Imm (Lit (find_lbl s sym))
+    | Ind1 (Lbl s) -> Ind1 (Lit (find_lbl s sym))
+    | Ind3 (Lbl s, offset) -> Ind3 (Lit (find_lbl s sym), offset)
+    | x -> x
+  in
+  let translate_ins (i, ops) = (i, map translate_op ops) in
+  let translate_data = function Quad (Lbl s) -> Quad (Lit (find_lbl s sym)) | x -> x in
+    match asm with
+      | Text xs -> fold_right (fun x acc -> append (sbytes_of_ins (translate_ins x)) acc) xs []
+      | Data xs -> fold_right (fun x acc -> append (sbytes_of_data (translate_data x)) acc) xs []
+
+let translate (p:prog) (sym:symtable) : sbyte list = 
+  List.concat (List.map (fun {lbl;global;asm} -> sbytes_of_asm asm sym) p)
+ 
+(* TODO: Check for multiple uses of the same label *)
+let get_sym_table (addr:int64) (p:prog) : quad * symtable =
+  let open Int64 in
+  let open List in
+  let f = fun (base, ls) x -> (add base (size_of_elem x), (x.lbl, base)::ls) in
+  let l = fold_left f (addr, []) p in
+    l
+
+let rec print_symtable (s:symtable) =
+  match s with
+    | [] -> Printf.printf "------------------\n"
+    | (lbl, quad)::xs -> Printf.printf "(%s, %x)\n" lbl (Int64.to_int quad); print_symtable xs
+
+(* Convert an X86 program into an object file:
+   - separate the text and data segments
+   - compute the size of each segment
+      Note: the size of an Asciz string section is (1 + the string length)
+
+   - resolve the labels to concrete addresses and 'patch' the instructions to 
+     replace Lbl values with the corresponding Imm values.
+
+   - the text segment starts at the lowest address
+   - the data segment starts after the text segment
+
+  HINT: List.fold_left and List.fold_right are your friends.
+ *)
+let assemble (p:prog) : exec =
+  let text = List.filter (fun e -> match e.asm with Text _ -> true | _ -> false) p in
+  let data = List.filter (fun e -> match e.asm with Data _ -> true | _ -> false) p in
+  let text_size = List.fold_left (fun acc x -> Int64.add acc (size_of_elem x)) 0L text in
+  let (addr, sym_text) = get_sym_table 0x400000L text in
+  let (addr2, sym_data) = get_sym_table addr data in
+  let sym = sym_text @ sym_data in
+  let stext = translate text sym in
+  let sdata = translate data sym in
+    print_symtable sym;
+    {
+      entry = find_lbl "main" sym;
+      text_pos = 0x400000L;
+      data_pos = Int64.add 0x400000L text_size;
+      text_seg = stext;
+      data_seg = sdata;
+    }
 
 
+(*
+  let text_seg = List.filter (fun e -> match e.asm with Text _ -> true | Data _ -> false) p in 
+  let data_seg = List.filter (fun e -> match e.asm with Text _ -> false | Data _ -> true ) p in 
+  let text_size = List.fold_left (fun acc x -> Int64.add acc (size_of_elem x)) 0L text_seg in
+  let sym_tbl = make_symbol_table 0x40000L text_seg in 
+  let stext = translate text_seg sym_tbl in
+  let sdata = translate data_seg sym_tbl in
+    {
+      entry = resolve_lbl "main" sym_tbl;
+      text_pos = 0x400000L;
+      data_pos = Int64.add 0x400000L text_size;
+      text_seg = stext;
+      data_seg = sdata;
+    }
+
+*)
 
 (* Convert an object file into an executable machine state. 
     - allocate the mem array
@@ -424,5 +541,32 @@ let assemble (p:prog) : exec =
   Hint: The Array.make, Array.blit, and Array.of_list library functions 
   may be of use.
 *)
+
+let get_address (x) : int = 
+  let x = map_addr x in begin match x with 
+    |Some x -> x
+    |None -> invalid_arg "wrong address"
+  end
+
 let load {entry; text_pos; data_pos; text_seg; data_seg} : mach = 
-failwith "load unimplemented"
+  let data_pos = get_address data_pos in
+  let text_pos = get_address text_pos in
+  let mem = Array.make mem_size (List.hd (sbytes_of_int64 0L)) in 
+  let text_array = Array.of_list text_seg in 
+  let data_array = Array.of_list data_seg in
+  Array.blit text_array 0 mem text_pos (Array.length text_array); 
+  Array.blit data_array 0 mem data_pos (Array.length data_array);
+  let sexit = sbytes_of_int64 exit_addr in
+  Array.blit (Array.of_list sexit) 0 mem (Array.length mem - 8) 8;
+  let regs = Array.make nregs 0L in
+  regs.(rind Rip) <- entry;
+  regs.(rind Rsp) <- 0x40FFF8L; 
+    {
+      flags = {
+        fo = false;
+        fs = false;
+        fz = false;
+      };
+      regs = regs;
+      mem = mem
+    }
