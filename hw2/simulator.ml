@@ -404,9 +404,12 @@ exception Redefined_sym of lbl
 
 type symtable = (lbl * quad) list
 
-let resolve_lbl (lbl:lbl) (sym:symtable) : quad =
-  let entry = List.find (fun (l, addr) -> String.equal lbl l) sym in
-    snd entry
+let find_lbl (lbl:lbl) (sym:symtable) : quad =
+  let entry = List.fold_left (fun acc (l, a) -> if String.equal lbl l then a::acc else acc) [] sym in
+  match entry with
+    | [] -> raise (Undefined_sym lbl)
+    | x::y::xs -> raise (Redefined_sym lbl)
+    | x::xs -> x
 
 let size_of_data (d:data) : int64 =
   let open Int64 in
@@ -419,21 +422,35 @@ let size_of_elem {lbl; global; asm} : int64 =
   | Text x -> Int64.mul (Int64.of_int (List.length x)) 8L
   | Data x -> List.fold_left (fun acc y -> Int64.add acc (size_of_data y)) 0L x
 
-let sbytes_of_asm (asm:asm) : sbyte list =
+let sbytes_of_asm (asm:asm) (sym:symtable) : sbyte list =
   let open List in
+  let translate_op op = match op with
+    | Imm (Lbl s) -> Imm (Lit (find_lbl s sym))
+    | Ind1 (Lbl s) -> Ind1 (Lit (find_lbl s sym))
+    | Ind3 (Lbl s, offset) -> Ind3 (Lit (find_lbl s sym), offset)
+    | x -> x
+  in
+  let translate_ins (i, ops) = (i, map translate_op ops) in
+  let translate_data = function Quad (Lbl s) -> Quad (Lit (find_lbl s sym)) | x -> x in
     match asm with
-      | Text xs -> concat (map sbytes_of_ins xs)
-      | Data xs -> concat (map sbytes_of_data xs)
+      | Text xs -> fold_right (fun x acc -> append (sbytes_of_ins (translate_ins x)) acc) xs []
+      | Data xs -> fold_right (fun x acc -> append (sbytes_of_data (translate_data x)) acc) xs []
 
-let translate (p:prog) (sym:symtable) : sbyte list = failwith "unimplemented"
+let translate (p:prog) (sym:symtable) : sbyte list = 
+  List.concat (List.map (fun {lbl;global;asm} -> sbytes_of_asm asm sym) p)
  
 (* TODO: Check for multiple uses of the same label *)
-let get_sym_table (addr:int64) (p:prog) : symtable =
+let get_sym_table (addr:int64) (p:prog) : quad * symtable =
   let open Int64 in
   let open List in
   let f = fun (base, ls) x -> (add base (size_of_elem x), (x.lbl, base)::ls) in
   let l = fold_left f (addr, []) p in
-    snd l
+    l
+
+let rec print_symtable (s:symtable) =
+  match s with
+    | [] -> Printf.printf "------------------\n"
+    | (lbl, quad)::xs -> Printf.printf "(%s, %x)\n" lbl (Int64.to_int quad); print_symtable xs
 
 (* Convert an X86 program into an object file:
    - separate the text and data segments
@@ -452,12 +469,14 @@ let assemble (p:prog) : exec =
   let text = List.filter (fun e -> match e.asm with Text _ -> true | _ -> false) p in
   let data = List.filter (fun e -> match e.asm with Data _ -> true | _ -> false) p in
   let text_size = List.fold_left (fun acc x -> Int64.add acc (size_of_elem x)) 0L text in
-  let sym_text = get_sym_table 0x400000L text in
-  let sym = get_sym_table (snd (List.hd sym_text)) data in
+  let (addr, sym_text) = get_sym_table 0x400000L text in
+  let (addr2, sym_data) = get_sym_table addr data in
+  let sym = sym_text @ sym_data in
   let stext = translate text sym in
   let sdata = translate data sym in
+    print_symtable sym;
     {
-      entry = resolve_lbl "main" sym;
+      entry = find_lbl "main" sym;
       text_pos = 0x400000L;
       data_pos = Int64.add 0x400000L text_size;
       text_seg = stext;
