@@ -165,12 +165,9 @@ let mem_check_quad (addr:quad) : int =
   match (lower, upper) with
     | (_, None) | (None, _) -> raise X86lite_segfault
     | (Some x, _) ->  x
-  
 
 let mem_load (m:mem) (addr:quad) : int64 =
-  let read_quad = 
-    Array.sub m (mem_check_quad addr) 8 
-  in
+  let read_quad = Array.sub m (mem_check_quad addr) 8 in
   int64_of_sbytes (Array.to_list read_quad)
 
 let mem_store (m:mem) (addr:quad) (v:int64) : unit = 
@@ -202,18 +199,13 @@ let store_data (m:mach) (op:operand) (v:int64) : unit =
 
 let set_flags (m:mach) (res:Int64_overflow.t) = 
   m.flags.fo <- res.Int64_overflow.overflow;
-  m.flags.fs <- (res.Int64_overflow.value < Int64.zero);
-  m.flags.fz <- (res.Int64_overflow.value = Int64.zero)
-  (*Printf.printf "Addq: res -> %d flags -> fo = %b, fs= %b, fz = %b\n"
-    (Int64.to_int res.Int64_overflow.value)
-    m.flags.fo
-    m.flags.fs
-    m.flags.fz*)
+  m.flags.fs <- (res.Int64_overflow.value < 0L);
+  m.flags.fz <- (res.Int64_overflow.value = 0L)
 
 let set_flags_log (m:mach) (res:int64) =
   m.flags.fo <- false;
-  m.flags.fs <- res < Int64.zero;
-  m.flags.fz <- res = Int64.zero
+  m.flags.fs <- res < 0L;
+  m.flags.fz <- res = 0L
 
 let interpret_operand (m:mach) (ops:operand list) (i:int): int64 =
   let op = List.nth ops i in
@@ -231,10 +223,10 @@ let store_byte (m:mach) (op:operand) (v:int64) : unit =
   match op with
     | Reg x ->  let old = logand m.regs.(rind x) 0xFFFFFFFFFFFFFF00L in
                   m.regs.(rind x) <- logor old (logand 0xFFL v)
-    | Ind1 (Lit x) ->           let dest = mem_check (map_addr x) in
-                                  m.mem.(dest) <- Byte (v |> to_int |> chr)
-    | Ind2 x ->                 let dest = mem_check (map_addr m.regs.(rind x)) in
-                                  m.mem.(dest) <- Byte (v |> to_int |> chr)
+    | Ind1 (Lit x) -> let dest = mem_check (map_addr x) in
+                        m.mem.(dest) <- Byte (v |> to_int |> chr)
+    | Ind2 x -> let dest = mem_check (map_addr m.regs.(rind x)) in
+                  m.mem.(dest) <- Byte (v |> to_int |> chr)
     | Ind3 (Lit offset, reg) -> let dest = mem_check (map_addr (Int64.add (m.regs.(rind reg)) offset )) in
                                   m.mem.(dest) <- Byte (v |> to_int |> chr)
     | _ -> invalid_arg "store_byte: tried to store to invalid operand"
@@ -308,8 +300,8 @@ let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit =
               let res = Int64.shift_right dest amt in
                 store_data m (List.nth ops 1) res;
                 if amt = 0 then () else
-                  (m.flags.fs <- res < Int64.zero;
-                  m.flags.fz <- res = Int64.zero);
+                  (m.flags.fs <- res < 0L;
+                  m.flags.fz <- res = 0L);
                 if amt = 1 then
                   m.flags.fo <- false
                 else ()
@@ -319,8 +311,8 @@ let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit =
               let res = Int64.shift_left dest amt in
                 store_data m (List.nth ops 1) res;
                 if amt = 0 then () else
-                  (m.flags.fs <- res < Int64.zero;
-                  m.flags.fz <- res = Int64.zero);
+                  (m.flags.fs <- res < 0L;
+                  m.flags.fz <- res = 0L);
                 
                 let x = Int64.shift_right_logical dest 62 in
                 if amt = 1 && x = 0b01L || x = 0b10L then
@@ -332,14 +324,14 @@ let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit =
               let res = Int64.shift_right_logical dest amt in
                 store_data m (List.nth ops 1) res;
                 if amt = 0 then () else 
-                  (m.flags.fs <- res < Int64.zero;
-                  m.flags.fz <- res = Int64.zero);
+                  (m.flags.fs <- res < 0L;
+                  m.flags.fz <- res = 0L);
                 if amt = 1 then 
                   m.flags.fo <- Int64.shift_right_logical dest 63 = 1L
                 else ()
 
     | Set cc -> let dest = List.nth ops 0 in
-                  store_byte m dest (if interp_cnd m.flags cc then Int64.one else Int64.zero)
+                  store_byte m dest (if interp_cnd m.flags cc then 1L else 0L)
                       
     | _ -> invalid_arg "interpret_bit: not a bit-manipultation instruction"
 
@@ -404,15 +396,12 @@ let eval_sbyte (m:mach) (s:sbyte) : unit =
     - simulate the instruction semantics
     - update the registers and/or memory appropriately
     - set the condition flags
-    *)
-
+*)
 let step (m:mach) : unit =
   let instr_addr = m.regs.(rind Rip) in
   let index = mem_check (map_addr instr_addr) in
   incr_rip m;
   eval_sbyte m m.mem.(index)
-
-
 
 (* Runs the machine until the rip register reaches a designated
    memory address. *)
@@ -466,14 +455,13 @@ let sbytes_of_asm (asm:asm) (sym:symtable) : sbyte list =
   in
   let translate_ins (i, ops) = (i, map translate_op ops) in
   let translate_data = function Quad (Lbl s) -> Quad (Lit (find_lbl s sym)) | x -> x in
-    match asm with
-      | Text xs -> fold_right (fun x acc -> append (sbytes_of_ins (translate_ins x)) acc) xs []
-      | Data xs -> fold_right (fun x acc -> append (sbytes_of_data (translate_data x)) acc) xs []
+  match asm with
+    | Text xs -> fold_right (fun x acc -> append (sbytes_of_ins (translate_ins x)) acc) xs []
+    | Data xs -> fold_right (fun x acc -> append (sbytes_of_data (translate_data x)) acc) xs []
 
 let translate (p:prog) (sym:symtable) : sbyte list = 
   List.concat (List.map (fun {lbl;global;asm} -> sbytes_of_asm asm sym) p)
  
-(* TODO: Check for multiple uses of the same label *)
 let get_sym_table (addr:int64) (p:prog) : quad * symtable =
   let open Int64 in
   let open List in
@@ -536,10 +524,10 @@ let assemble (p:prog) : exec =
   may be of use.
 *)
 let get_address (x) : int = 
-  let x = map_addr x in begin match x with 
+  let x = map_addr x in 
+  match x with 
     |Some x -> x
     |None -> invalid_arg "wrong address"
-  end
 
 let load {entry; text_pos; data_pos; text_seg; data_seg} : mach = 
   let data_pos = get_address data_pos in
