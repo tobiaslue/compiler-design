@@ -294,19 +294,24 @@ let interpret_log (m:mach) (i:opcode) (ops:operand list): unit =
     | _ -> invalid_arg "interpret_log: not a logic instruction"
 
 let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit = 
-  let amt = Int64.to_int (interpret_operand m ops 0) in
-  let dest = interpret_operand m ops 1 in 
   match i with
-    | Sarq -> let res = Int64.shift_right dest amt in
+    | Sarq -> let amt = Int64.to_int (interpret_operand m ops 0) in
+              let dest = interpret_operand m ops 1 in 
+              let res = Int64.shift_right dest amt in
                 store_data m (List.nth ops 1) res;
 
-    | Shlq -> let res = Int64.shift_left dest amt in
+    | Shlq -> let amt = Int64.to_int (interpret_operand m ops 0) in
+              let dest = interpret_operand m ops 1 in 
+              let res = Int64.shift_left dest amt in
                 store_data m (List.nth ops 1) res;
 
-    | Shrq -> let res = Int64.shift_right_logical dest amt in
+    | Shrq -> let amt = Int64.to_int (interpret_operand m ops 0) in
+              let dest = interpret_operand m ops 1 in 
+              let res = Int64.shift_right_logical dest amt in
                 store_data m (List.nth ops 1) res;
 
-    | Set cc -> let dest = List.nth ops 0 in
+    | Set cc -> Printf.printf "finally arrived in function"; 
+              let dest = List.nth ops 0 in
                   store_byte m dest (if interp_cnd m.flags cc then Int64.one else Int64.zero)
                       
     | _ -> invalid_arg "interpret_bit: not a bit-manipultation instruction"
@@ -342,10 +347,14 @@ let interpret_control (m:mach) (i:opcode) (ops:operand list) : unit =
                 m.regs.(rind Rip) <- src
 
     | Callq ->  let src = interpret_operand m ops 0 in
-                  interpret_data m Pushq [Reg Rip];
-                  m.regs.(rind Rip) <- src
+                  incr_rip m;
+                  m.regs.(rind Rsp) <- Int64.sub m.regs.(rind Rsp) 8L;
+                  mem_store m.mem m.regs.(rind Rsp) (m.regs.(rind Rip));
+                  m.regs.(rind Rip) <- src;
 
-    | Retq -> interpret_data m Popq [Reg Rip]
+    | Retq -> let data = mem_load m.mem m.regs.(rind Rsp) in
+                m.regs.(rind Rip) <- data;
+                m.regs.(rind Rsp) <- Int64.add m.regs.(rind Rsp) 8L;
 
     | J cc -> let src = interpret_operand m ops 0 in  
                 m.regs.(rind Rip) <- if interp_cnd m.flags cc then src 
@@ -452,6 +461,12 @@ let rec print_symtable (s:symtable) =
     | [] -> Printf.printf "------------------\n"
     | (lbl, quad)::xs -> Printf.printf "(%s, %x)\n" lbl (Int64.to_int quad); print_symtable xs
 
+let string_of_sbyte (s:sbyte) =
+  match s with
+    | InsB0 x -> "InsB0 (" ^ string_of_ins x ^ ")"
+    | InsFrag -> "InsFrag"
+    | Byte x -> "Byte (no-data)"
+
 (* Convert an X86 program into an object file:
    - separate the text and data segments
    - compute the size of each segment
@@ -474,7 +489,6 @@ let assemble (p:prog) : exec =
   let sym = sym_text @ sym_data in
   let stext = translate text sym in
   let sdata = translate data sym in
-    print_symtable sym;
     {
       entry = find_lbl "main" sym;
       text_pos = 0x400000L;
@@ -496,5 +510,31 @@ let assemble (p:prog) : exec =
   Hint: The Array.make, Array.blit, and Array.of_list library functions 
   may be of use.
 *)
+let get_address (x) : int = 
+  let x = map_addr x in begin match x with 
+    |Some x -> x
+    |None -> invalid_arg "wrong address"
+  end
+
 let load {entry; text_pos; data_pos; text_seg; data_seg} : mach = 
-failwith "load unimplemented"
+  let data_pos = get_address data_pos in
+  let text_pos = get_address text_pos in
+  let mem = Array.make mem_size (List.hd (sbytes_of_int64 0L)) in 
+  let text_array = Array.of_list text_seg in 
+  let data_array = Array.of_list data_seg in
+  Array.blit text_array 0 mem text_pos (Array.length text_array); 
+  Array.blit data_array 0 mem data_pos (Array.length data_array);
+  let sexit = sbytes_of_int64 exit_addr in
+  Array.blit (Array.of_list sexit) 0 mem (Array.length mem - 8) 8;
+  let regs = Array.make nregs 0L in
+  regs.(rind Rip) <- entry;
+  regs.(rind Rsp) <- 0x40FFF8L; 
+    {
+      flags = {
+        fo = false;
+        fs = false;
+        fz = false;
+      };
+      regs = regs;
+      mem = mem
+    }
