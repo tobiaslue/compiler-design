@@ -8,6 +8,8 @@ open Asm
 (* You should also add additional test cases here to help you   *)
 (* debug your program.                                          *)
 
+
+(*computes gcd of two positive integers. if the input contains 0 or negative numbers, zero is returned.*)
 let gcd a b =         
         [ text "main"
                         [ Movq, [~$a; ~%Rdi]
