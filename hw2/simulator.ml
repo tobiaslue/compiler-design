@@ -149,7 +149,7 @@ let interp_cnd {fo; fs; fz} : cnd -> bool = function
 (* Maps an X86lite address into Some OCaml array index,
    or None if the address is not within the legal address space. *)
 let map_addr (addr:quad) : int option =
-  if (addr < mem_bot) || (addr > mem_top) then None
+  if (addr < mem_bot) || (addr >= mem_top) then None
   else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
 
 let incr_rip (m:mach) = 
@@ -159,9 +159,17 @@ let mem_check : int option -> int = function
    | Some x -> x
    | None -> raise X86lite_segfault
 
+let mem_check_quad (addr:quad) : int =
+  let upper = map_addr (Int64.add addr 7L) in
+  let lower = map_addr addr in
+  match (lower, upper) with
+    | (_, None) | (None, _) -> raise X86lite_segfault
+    | (Some x, _) ->  x
+  
+
 let mem_load (m:mem) (addr:quad) : int64 =
   let read_quad = 
-    Array.sub m (mem_check (map_addr addr)) 8 
+    Array.sub m (mem_check_quad addr) 8 
   in
   int64_of_sbytes (Array.to_list read_quad)
 
@@ -299,16 +307,36 @@ let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit =
               let dest = interpret_operand m ops 1 in 
               let res = Int64.shift_right dest amt in
                 store_data m (List.nth ops 1) res;
+                if amt = 0 then () else
+                  (m.flags.fs <- res < Int64.zero;
+                  m.flags.fz <- res = Int64.zero);
+                if amt = 1 then
+                  m.flags.fo <- false
+                else ()
 
     | Shlq -> let amt = Int64.to_int (interpret_operand m ops 0) in
               let dest = interpret_operand m ops 1 in 
               let res = Int64.shift_left dest amt in
                 store_data m (List.nth ops 1) res;
+                if amt = 0 then () else
+                  (m.flags.fs <- res < Int64.zero;
+                  m.flags.fz <- res = Int64.zero);
+                
+                let x = Int64.shift_right_logical dest 62 in
+                if amt = 1 && x = 0b01L || x = 0b10L then
+                  m.flags.fo <- true
+                else ()
 
     | Shrq -> let amt = Int64.to_int (interpret_operand m ops 0) in
               let dest = interpret_operand m ops 1 in 
               let res = Int64.shift_right_logical dest amt in
                 store_data m (List.nth ops 1) res;
+                if amt = 0 then () else 
+                  (m.flags.fs <- res < Int64.zero;
+                  m.flags.fz <- res = Int64.zero);
+                if amt = 1 then 
+                  m.flags.fo <- Int64.shift_right_logical dest 63 = 1L
+                else ()
 
     | Set cc -> let dest = List.nth ops 0 in
                   store_byte m dest (if interp_cnd m.flags cc then Int64.one else Int64.zero)
@@ -340,13 +368,11 @@ let interpret_control (m:mach) (i:opcode) (ops:operand list) : unit =
               let dest = interpret_operand m ops 1 in
               let res = Int64_overflow.sub dest src in
                 set_flags m res;
-                incr_rip m;
 
     | Jmp ->  let src = interpret_operand m ops 0 in
                 m.regs.(rind Rip) <- src
 
     | Callq ->  let src = interpret_operand m ops 0 in
-                  incr_rip m;
                   m.regs.(rind Rsp) <- Int64.sub m.regs.(rind Rsp) 8L;
                   mem_store m.mem m.regs.(rind Rsp) (m.regs.(rind Rip));
                   m.regs.(rind Rip) <- src;
@@ -356,16 +382,15 @@ let interpret_control (m:mach) (i:opcode) (ops:operand list) : unit =
                 m.regs.(rind Rsp) <- Int64.add m.regs.(rind Rsp) 8L;
 
     | J cc -> let src = interpret_operand m ops 0 in  
-                m.regs.(rind Rip) <- if interp_cnd m.flags cc then src 
-                                                              else Int64.add m.regs.(rind Rip) 8L
+                m.regs.(rind Rip) <- if interp_cnd m.flags cc then src else m.regs.(rind Rip)
     | _ -> invalid_arg "interpret_control: not a control-flow and condition instruction"
 
 let interpret_instr (m:mach) ((instr, op):ins) : unit =
   match instr with
-    | Negq | Addq | Subq | Imulq | Incq | Decq -> interpret_arith m instr op; incr_rip m
-    | Notq | Andq | Orq | Xorq -> interpret_log m instr op; incr_rip m
-    | Sarq | Shlq | Shrq | Set _ -> interpret_bit m instr op; incr_rip m
-    | Leaq | Movq | Pushq | Popq -> interpret_data m instr op; incr_rip m;
+    | Negq | Addq | Subq | Imulq | Incq | Decq -> interpret_arith m instr op
+    | Notq | Andq | Orq | Xorq -> interpret_log m instr op
+    | Sarq | Shlq | Shrq | Set _ -> interpret_bit m instr op
+    | Leaq | Movq | Pushq | Popq -> interpret_data m instr op
     | Cmpq | Jmp | Callq | Retq | J _ -> interpret_control m instr op
 
 let eval_sbyte (m:mach) (s:sbyte) : unit = 
@@ -384,6 +409,7 @@ let eval_sbyte (m:mach) (s:sbyte) : unit =
 let step (m:mach) : unit =
   let instr_addr = m.regs.(rind Rip) in
   let index = mem_check (map_addr instr_addr) in
+  incr_rip m;
   eval_sbyte m m.mem.(index)
 
 
