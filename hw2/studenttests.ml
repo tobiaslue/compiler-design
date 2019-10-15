@@ -48,6 +48,11 @@ let gcd a b =
                         ; Retq, []
                         ]
         ]
+let program_test (p:prog) (ans:int64) () =
+  let res = assemble p |> load |> run in
+  if res <> ans
+  then failwith (Printf.sprintf("Expected %Ld but got %Ld") ans res)
+  else ()
 
 
 let provided_tests : suite = [
