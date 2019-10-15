@@ -310,8 +310,7 @@ let interpret_bit (m:mach) (i:opcode) (ops:operand list) : unit =
               let res = Int64.shift_right_logical dest amt in
                 store_data m (List.nth ops 1) res;
 
-    | Set cc -> Printf.printf "finally arrived in function"; 
-              let dest = List.nth ops 0 in
+    | Set cc -> let dest = List.nth ops 0 in
                   store_byte m dest (if interp_cnd m.flags cc then Int64.one else Int64.zero)
                       
     | _ -> invalid_arg "interpret_bit: not a bit-manipultation instruction"
