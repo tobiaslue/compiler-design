@@ -262,7 +262,7 @@ let arg_loc (n : int) : operand =
 let stack_layout args (block, lbled_blocks) : layout =
   let f = fun i arg -> (arg, arg_loc i) in
   let arg_layout = List.mapi f args in (*computes layout of function arguments*)
-  failwith "stack_layout not implemented"
+  arg_layout
 
 (* The code for the entry-point of a function must do several things:
 
