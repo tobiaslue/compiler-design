@@ -5,16 +5,16 @@ open X86
 
 (* Overview ----------------------------------------------------------------- *)
 
-(* We suggest that you spend some time understinging this entire file and 
+(* We suggest that you spend some time understinging this entire file and
    how it fits with the compiler pipeline before making changes.  The suggested
-   plan for implementing the compiler is provided on the project web page. 
+   plan for implementing the compiler is provided on the project web page.
 *)
 
 
 (* helpers ------------------------------------------------------------------ *)
 
 (* Map LL comparison operations to X86 condition codes *)
-let compile_cnd = function
+let com2pile_cnd = function
   | Ll.Eq  -> X86.Eq
   | Ll.Ne  -> X86.Neq
   | Ll.Slt -> X86.Lt
@@ -46,7 +46,7 @@ let compile_cnd = function
    'stack layout'.  A stack layout maps a uid to an X86 operand for
    accessing its contents.  For this compilation strategy, the operand
    is always an offset from ebp (in bytes) that represents a storage slot in
-   the stack.  
+   the stack.
 *)
 
 type layout = (uid * X86.operand) list
@@ -71,7 +71,7 @@ let lookup m x = List.assoc x m
 
      NOTE: two important facts about global identifiers:
 
-     (1) You should use (Platform.mangle gid) to obtain a string 
+     (1) You should use (Platform.mangle gid) to obtain a string
      suitable for naming a global label on your platform (OS X expects
      "_main" while linux expects "main").
 
@@ -86,7 +86,7 @@ let lookup m x = List.assoc x m
    manipulated by the LLVM IR instruction. You might find it useful to
    implement the following helper function, whose job is to generate
    the X86 instruction that moves an LLVM operand into a designated
-   destination (usually a register).  
+   destination (usually a register).
 *)
 let compile_operand ctxt dest : Ll.operand -> ins =
   function _ -> failwith "compile_operand unimplemented"
@@ -95,7 +95,7 @@ let compile_operand ctxt dest : Ll.operand -> ins =
 
 (* compiling call  ---------------------------------------------------------- *)
 
-(* You will probably find it helpful to implement a helper function that 
+(* You will probably find it helpful to implement a helper function that
    generates code for the LLVM IR call instruction.
 
    The code you generate should follow the x64 System V AMD64 ABI
@@ -128,7 +128,7 @@ let compile_call ctxt fop args =
    the appropriate arithemetic calculations.
 *)
 
-(* [size_ty] maps an LLVMlite type to a size in bytes. 
+(* [size_ty] maps an LLVMlite type to a size in bytes.
     (needed for getelementptr)
 
    - the size of a struct is the sum of the sizes of each component
@@ -145,7 +145,8 @@ failwith "size_ty not implemented"
 
 
 
-(* Generates code that computes a pointer value.  
+
+(* Generates code that computes a pointer value.
 
    1. op must be of pointer type: t*
 
@@ -156,14 +157,14 @@ failwith "size_ty not implemented"
 
    4. subsequent indices are interpreted according to the type t:
 
-     - if t is a struct, the index must be a constant n and it 
+     - if t is a struct, the index must be a constant n and it
        picks out the n'th element of the struct. [ NOTE: the offset
-       within the struct of the n'th element is determined by the 
+       within the struct of the n'th element is determined by the
        sizes of the types of the previous elements ]
 
      - if t is an array, the index can be any operand, and its
        value determines the offset within the array.
- 
+
      - if t is any other type, the path is invalid
 
    5. if the index is valid, the remainder of the path is computed as
@@ -229,7 +230,6 @@ let compile_lbl_block lbl ctxt blk : elem =
   Asm.text lbl (compile_block ctxt blk)
 
 
-
 (* compile_fdecl ------------------------------------------------------------ *)
 
 
@@ -241,16 +241,22 @@ let compile_lbl_block lbl ctxt blk : elem =
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
 let arg_loc (n : int) : operand =
-failwith "arg_loc not implemented"
+if n = 0 then (Reg Rdi)
+else if n = 1 then (Reg Rsi)
+else if n = 2 then (Reg Rdx)
+else if n = 3 then (Reg Rcx)
+else if n = 4 then (Reg R08)
+else if n = 5 then (Reg R09)
+else Ind3 (Lit (Int64.of_int ((n-4)*8)), Rbp)
 
 
-(* We suggest that you create a helper function that computes the 
+(* We suggest that you create a helper function that computes the
    stack layout for a given function declaration.
 
    - each function argument should be copied into a stack slot
-   - in this (inefficient) compilation strategy, each local id 
+   - in this (inefficient) compilation strategy, each local id
      is also stored as a stack slot.
-   - see the discusion about locals 
+   - see the discusion about locals
 
 *)
 let stack_layout args (block, lbled_blocks) : layout =
