@@ -1,4 +1,4 @@
-2(* ll ir compilation -------------------------------------------------------- *)
+(* ll ir compilation -------------------------------------------------------- *)
 
 open Ll
 open X86
@@ -241,13 +241,14 @@ let compile_lbl_block lbl ctxt blk : elem =
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
 let arg_loc (n : int) : operand =
-  if n = 0 then (Reg Rdi)
-  else if n = 1 then (Reg Rsi)
-  else if n = 2 then (Reg Rdx)
-  else if n = 3 then (Reg Rcx)
-  else if n = 4 then (Reg R08)
-  else if n = 5 then (Reg R09)
-  else Ind3 (Lit (Int64.of_int ((n-4)*8)), Rbp)
+  match n with
+    | 0 -> (Reg Rdi)
+    | 1 -> (Reg Rsi)
+    | 2 -> (Reg Rdx)
+    | 3 -> (Reg Rcx)
+    | 4 -> (Reg R08)
+    | 5 -> (Reg R09)
+    | n ->  Ind3 (Lit (Int64.of_int ((n-4)*8)), Rbp)
 
 
 (* We suggest that you create a helper function that computes the
@@ -259,10 +260,17 @@ let arg_loc (n : int) : operand =
    - see the discusion about locals
 
 *)
-let stack_layout args (block, lbled_blocks) : layout =
-  let f = fun i arg -> (arg, arg_loc i) in
-  let arg_layout = List.mapi f args in (*computes layout of function arguments*)
-  arg_layout
+let stack_layout args (block, lbled_blocks) : layout = failwith "stack layout undefined"
+
+let function_prologue : X86.ins list =
+  Asm.([ Pushq, [~%Rbp]
+        ; Movq, [~%Rsp; ~%Rbp]
+        ])
+
+let function_epilogue : X86.ins list =
+  Asm.([ Popq, [~%Rbp]
+        ; Retq, []
+      ])
 
 (* The code for the entry-point of a function must do several things:
 
@@ -286,9 +294,10 @@ let compile_fdecl tdecls name { f_ty; f_param; f_cfg } =
     f_ty = (argument_types list, return type)
     f_param = list of local identifiers
     f_cfg = list of (instruction block, (label, instruction block))*)
-  let layout = stack_layout f_param f_cfg in
-  failwith "compile_fdecl unimplemented"
 
+  Asm.[text name @@
+      function_prologue
+    @ function_epilogue]
 
 
 (* compile_gdecl ------------------------------------------------------------ *)
