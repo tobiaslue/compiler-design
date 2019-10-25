@@ -1,4 +1,4 @@
-(* ll ir compilation -------------------------------------------------------- *)
+2(* ll ir compilation -------------------------------------------------------- *)
 
 open Ll
 open X86
@@ -241,13 +241,13 @@ let compile_lbl_block lbl ctxt blk : elem =
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
 let arg_loc (n : int) : operand =
-if n = 0 then (Reg Rdi)
-else if n = 1 then (Reg Rsi)
-else if n = 2 then (Reg Rdx)
-else if n = 3 then (Reg Rcx)
-else if n = 4 then (Reg R08)
-else if n = 5 then (Reg R09)
-else Ind3 (Lit (Int64.of_int ((n-4)*8)), Rbp)
+  if n = 0 then (Reg Rdi)
+  else if n = 1 then (Reg Rsi)
+  else if n = 2 then (Reg Rdx)
+  else if n = 3 then (Reg Rcx)
+  else if n = 4 then (Reg R08)
+  else if n = 5 then (Reg R09)
+  else Ind3 (Lit (Int64.of_int ((n-4)*8)), Rbp)
 
 
 (* We suggest that you create a helper function that computes the
@@ -260,7 +260,9 @@ else Ind3 (Lit (Int64.of_int ((n-4)*8)), Rbp)
 
 *)
 let stack_layout args (block, lbled_blocks) : layout =
-failwith "stack_layout not implemented"
+  let f = fun i arg -> (arg, arg_loc i) in
+  let arg_layout = List.mapi f args in (*computes layout of function arguments*)
+  failwith "stack_layout not implemented"
 
 (* The code for the entry-point of a function must do several things:
 
@@ -279,7 +281,13 @@ failwith "stack_layout not implemented"
      to hold all of the local stack slots.
 *)
 let compile_fdecl tdecls name { f_ty; f_param; f_cfg } =
-failwith "compile_fdecl unimplemented"
+  (*tdecls = list of (typename, type)
+    name = name of funtion?
+    f_ty = (argument_types list, return type)
+    f_param = list of local identifiers
+    f_cfg = list of (instruction block, (label, instruction block))*)
+  let layout = stack_layout f_param f_cfg in
+  failwith "compile_fdecl unimplemented"
 
 
 
