@@ -88,9 +88,11 @@ let lookup m x = List.assoc x m
    the X86 instruction that moves an LLVM operand into a designated
    destination (usually a register).
 *)
-let compile_operand ctxt dest : Ll.operand -> ins =
-  function _ -> failwith "compile_operand unimplemented"
-
+let compile_operand ctxt dest : Ll.operand -> ins = function
+  | Null -> Movq, [Imm(Lit 0L); dest]
+  | Const x -> Movq, [Imm(Lit x); dest]
+  | Gid gid -> Leaq, [Ind3((Lbl (Platform.mangle gid)), Rip); dest]
+  | Id uid -> Movq, [lookup ctxt.layout uid; dest]
 
 
 (* compiling call  ---------------------------------------------------------- *)
@@ -199,8 +201,42 @@ failwith "compile_gep not implemented"
 
    - Bitcast: does nothing interesting at the assembly level
 *)
+
+
 let compile_insn ctxt (uid, i) : X86.ins list =
-      failwith "compile_insn not implemented"
+  match i with
+    | Binop (bop, ty, op1, op2) -> 
+      compile_operand ctxt (Reg Rbx) op1 ::
+      compile_operand ctxt (Reg Rcx) op2 ::
+      begin match bop with
+        | Add -> Asm.(Addq, [~%Rcx; ~%Rbx])
+        | Sub -> Asm.(Subq, [~%Rcx; ~%Rbx])
+        | Mul -> Asm.(Imulq, [~%Rcx; ~%Rbx])
+        | Shl -> Asm.(Shlq, [~%Rcx; ~%Rbx])
+        | Lshr -> Asm.(Shrq, [~%Rcx; ~%Rbx])
+        | Ashr -> Asm.(Sarq, [~%Rcx; ~%Rbx])
+        | And -> Asm.(Andq, [~%Rcx; ~%Rbx])
+        | Or -> Asm.(Orq, [~%Rcx; ~%Rbx])
+        | Xor -> Asm.(Xorq, [~%Rcx; ~%Rbx])
+      end ::
+      Asm.[Movq, [~%Rbx; lookup ctxt.layout uid]]
+    
+    | Icmp (cnd, ty, op1, op2) ->
+      compile_operand ctxt (Reg Rbx) op1 ::
+      compile_operand ctxt (Reg Rcx) op2 ::
+      Asm.(Movq, [~$0; ~%Rdx]) ::
+      Asm.(Cmpq, [~%Rcx; ~%Rbx]) ::
+      begin match cnd with
+        | Eq -> Asm.(Set Eq, [~%Rdx])
+        | Ne -> Asm.(Set Neq, [~%Rdx])
+        | Slt -> Asm.(Set Lt, [~%Rdx])
+        | Sle -> Asm.(Set Le, [~%Rdx])
+        | Sgt -> Asm.(Set Gt, [~%Rdx])
+        | Sge -> Asm.(Set Ge, [~%Rdx])
+      end ::
+      Asm.[Movq, [~%Rdx; lookup ctxt.layout uid]]
+
+    | _ -> failwith "compile_insn unimplemented"
 
 
 
@@ -217,16 +253,37 @@ let compile_insn ctxt (uid, i) : X86.ins list =
    - Cbr branch should treat its operand as a boolean conditional
 *)
 let compile_terminator ctxt t =
-  failwith "compile_terminator not implemented"
+  let l = List.length ctxt.layout in
+  match t with
+    | Ret (ty, op) ->  
+      let epilogue = Asm.([Addq, [~$(l*8); ~%Rsp]
+                          ; Popq, [~%Rbp]
+                          ; Retq, []
+                          ])
+      in
+      begin match (ty, op) with
+        | (Void, _) -> epilogue
+        | (_, Some o) -> compile_operand ctxt (Reg Rax) o ::
+                         epilogue
+        | _ -> failwith "this case should not occur"
+      end
+    | Br lbl -> Asm.([Jmp, [~$$(Platform.mangle lbl)]])
 
+    | Cbr (op, lbl1, lbl2) -> 
+      compile_operand ctxt (Reg Rcx) op ::
+      Asm.[Cmpq, [~$0; ~%Rcx]
+          ; J Neq, [~$$(Platform.mangle lbl1)]
+          ; Jmp, [~$$(Platform.mangle lbl2)]
+      ]
 
 (* compiling blocks --------------------------------------------------------- *)
 
 (* We have left this helper function here for you to complete. *)
 let compile_block ctxt blk : ins list =
-  failwith "compile_block not implemented"
+  (List.flatten (List.map (compile_insn ctxt) blk.insns)) @
+  compile_terminator ctxt (snd blk.term)
 
-let compile_lbl_block lbl ctxt blk : elem =
+let compile_lbl_block ctxt (lbl, blk) : elem =
   Asm.text lbl (compile_block ctxt blk)
 
 
@@ -260,17 +317,23 @@ let arg_loc (n : int) : operand =
    - see the discusion about locals
 
 *)
-let stack_layout args (block, lbled_blocks) : layout = failwith "stack layout undefined"
+let stack_layout args (block, lbled_blocks) : layout =
+  let uid_of_ins = fun (uid, insn) -> uid in
+  let uids_of_block = fun b -> List.map uid_of_ins b.insns in
+  let uids_of_lbled_block = fun (_, b) -> uids_of_block b in
+  let uids = args @
+             uids_of_block block @
+             List.flatten (List.map uids_of_lbled_block lbled_blocks)
+  in
+  let f = fun i uid -> (uid, (Ind3 (Lit (Int64.of_int ((i+1)*(-8))), Rbp))) in
+  List.mapi f uids
 
+(* static code generated for each function declaration regardless of the parameters and body *)
 let function_prologue : X86.ins list =
   Asm.([ Pushq, [~%Rbp]
         ; Movq, [~%Rsp; ~%Rbp]
         ])
 
-let function_epilogue : X86.ins list =
-  Asm.([ Popq, [~%Rbp]
-        ; Retq, []
-      ])
 
 (* The code for the entry-point of a function must do several things:
 
@@ -289,15 +352,21 @@ let function_epilogue : X86.ins list =
      to hold all of the local stack slots.
 *)
 let compile_fdecl tdecls name { f_ty; f_param; f_cfg } =
-  (*tdecls = list of (typename, type)
-    name = name of funtion?
-    f_ty = (argument_types list, return type)
-    f_param = list of local identifiers
-    f_cfg = list of (instruction block, (label, instruction block))*)
-
-  Asm.[text name @@
-      function_prologue
-    @ function_epilogue]
+  let layout = stack_layout f_param f_cfg in
+  let asm_of_arg = fun i uid -> Asm.([Movq, [arg_loc i; lookup layout uid]]) in 
+  let asm_of_args = List.flatten @@ List.mapi asm_of_arg f_param in
+  let reserve_space = fun i -> if i > 0 then Asm.[Subq, [~$(i*8); ~%Rsp]] else [] in
+  let ctxt = {tdecls; layout} in
+  let block = compile_block ctxt (fst f_cfg) in
+  let lbl_block = List.map (compile_lbl_block ctxt) (snd f_cfg) in
+  Asm.[gtext (Platform.mangle name) @@
+    function_prologue @
+    reserve_space (List.length layout) @
+    asm_of_args @ 
+    block] 
+  @
+  lbl_block
+    
 
 
 (* compile_gdecl ------------------------------------------------------------ *)
