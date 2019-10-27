@@ -14,7 +14,7 @@ open X86
 (* helpers ------------------------------------------------------------------ *)
 
 (* Map LL comparison operations to X86 condition codes *)
-let com2pile_cnd = function
+let compile_cnd = function
   | Ll.Eq  -> X86.Eq
   | Ll.Ne  -> X86.Neq
   | Ll.Slt -> X86.Lt
@@ -226,14 +226,7 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       compile_operand ctxt (Reg Rcx) op2 ::
       Asm.(Movq, [~$0; ~%Rdx]) ::
       Asm.(Cmpq, [~%Rcx; ~%Rbx]) ::
-      begin match cnd with
-        | Eq -> Asm.(Set Eq, [~%Rdx])
-        | Ne -> Asm.(Set Neq, [~%Rdx])
-        | Slt -> Asm.(Set Lt, [~%Rdx])
-        | Sle -> Asm.(Set Le, [~%Rdx])
-        | Sgt -> Asm.(Set Gt, [~%Rdx])
-        | Sge -> Asm.(Set Ge, [~%Rdx])
-      end ::
+      Asm.(Set (compile_cnd cnd), [~%Rdx])::
       Asm.[Movq, [~%Rdx; lookup ctxt.layout uid]]
 
     | _ -> failwith "compile_insn unimplemented"
