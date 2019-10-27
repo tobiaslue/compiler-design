@@ -95,6 +95,17 @@ let compile_operand ctxt dest : Ll.operand -> ins = function
   | Id uid -> Movq, [lookup ctxt.layout uid; dest]
 
 
+let move_args ctxt (i: int) (arg: Ll.operand) : ins =
+  begin match i with
+    |0 -> (compile_operand ctxt (Reg Rdi)) arg
+    |1 -> (compile_operand ctxt (Reg Rsi)) arg
+    |2 -> (compile_operand ctxt (Reg Rdx)) arg
+    |3 -> (compile_operand ctxt (Reg Rcx)) arg
+    |4 -> (compile_operand ctxt (Reg R08)) arg
+    |5 -> (compile_operand ctxt (Reg R09)) arg
+    |n -> (compile_operand ctxt (Ind3 (Lit (Int64.of_int ((i-4)*8)), Rbp))) arg
+  end
+
 (* compiling call  ---------------------------------------------------------- *)
 
 (* You will probably find it helpful to implement a helper function that
@@ -114,8 +125,13 @@ let compile_operand ctxt dest : Ll.operand -> ins = function
    [ NOTE: Don't forget to preserve caller-save registers (only if
    needed). ]
 *)
-let compile_call ctxt fop args =
-  failwith "compile_call not implemented"
+let compile_call ctxt fop args : X86.ins list=
+  let op = match fop with typ, op -> op in
+  List.mapi (move_args ctxt) args @
+  [(compile_operand ctxt (Reg Rcx)) op] @
+  [Callq, [Reg Rcx]]
+
+
 
 
 
@@ -177,6 +193,8 @@ let compile_gep ctxt (op : Ll.ty * Ll.operand) (path: Ll.operand list) : ins lis
 failwith "compile_gep not implemented"
 
 
+let get_op arg : Ll.operand =
+  match arg with _, op -> op
 
 (* compiling instructions  -------------------------------------------------- *)
 
@@ -205,7 +223,7 @@ failwith "compile_gep not implemented"
 
 let compile_insn ctxt (uid, i) : X86.ins list =
   match i with
-    | Binop (bop, ty, op1, op2) -> 
+    | Binop (bop, ty, op1, op2) ->
       compile_operand ctxt (Reg Rbx) op1 ::
       compile_operand ctxt (Reg Rcx) op2 ::
       begin match bop with
@@ -220,7 +238,7 @@ let compile_insn ctxt (uid, i) : X86.ins list =
         | Xor -> Asm.(Xorq, [~%Rcx; ~%Rbx])
       end ::
       Asm.[Movq, [~%Rbx; lookup ctxt.layout uid]]
-    
+
     | Icmp (cnd, ty, op1, op2) ->
       compile_operand ctxt (Reg Rbx) op1 ::
       compile_operand ctxt (Reg Rcx) op2 ::
@@ -229,6 +247,8 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       Asm.(Set (compile_cnd cnd), [~%Rdx])::
       Asm.[Movq, [~%Rdx; lookup ctxt.layout uid]]
 
+    | Call (typ, op, args) -> compile_call ctxt (typ, op) (List.map get_op args) @
+                              [Movq, [(Reg Rax); (lookup ctxt.layout uid)]]
     | _ -> failwith "compile_insn unimplemented"
 
 
@@ -248,7 +268,7 @@ let compile_insn ctxt (uid, i) : X86.ins list =
 let compile_terminator ctxt t =
   let l = List.length ctxt.layout in
   match t with
-    | Ret (ty, op) ->  
+    | Ret (ty, op) ->
       let epilogue = Asm.([Addq, [~$(l*8); ~%Rsp]
                           ; Popq, [~%Rbp]
                           ; Retq, []
@@ -262,7 +282,7 @@ let compile_terminator ctxt t =
       end
     | Br lbl -> Asm.([Jmp, [~$$(Platform.mangle lbl)]])
 
-    | Cbr (op, lbl1, lbl2) -> 
+    | Cbr (op, lbl1, lbl2) ->
       compile_operand ctxt (Reg Rcx) op ::
       Asm.[Cmpq, [~$0; ~%Rcx]
           ; J Neq, [~$$(Platform.mangle lbl1)]
@@ -346,7 +366,7 @@ let function_prologue : X86.ins list =
 *)
 let compile_fdecl tdecls name { f_ty; f_param; f_cfg } =
   let layout = stack_layout f_param f_cfg in
-  let asm_of_arg = fun i uid -> Asm.([Movq, [arg_loc i; lookup layout uid]]) in 
+  let asm_of_arg = fun i uid -> Asm.([Movq, [arg_loc i; lookup layout uid]]) in
   let asm_of_args = List.flatten @@ List.mapi asm_of_arg f_param in
   let reserve_space = fun i -> if i > 0 then Asm.[Subq, [~$(i*8); ~%Rsp]] else [] in
   let ctxt = {tdecls; layout} in
@@ -355,11 +375,11 @@ let compile_fdecl tdecls name { f_ty; f_param; f_cfg } =
   Asm.[gtext (Platform.mangle name) @@
     function_prologue @
     reserve_space (List.length layout) @
-    asm_of_args @ 
-    block] 
+    asm_of_args @
+    block]
   @
   lbl_block
-    
+
 
 
 (* compile_gdecl ------------------------------------------------------------ *)
