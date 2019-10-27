@@ -201,11 +201,36 @@ failwith "compile_gep not implemented"
 
    - Bitcast: does nothing interesting at the assembly level
 *)
+exception TypeError
+
+let type_check (i:insn) : unit = 
+  match i with
+    | Binop (_, ty, _, _) -> 
+      begin match ty with
+        | I64 -> ()
+        | _ -> raise TypeError
+      end
+    | Icmp (_, ty, _, _)  (* simple types *)
+    | Alloca ty
+    | Store (ty, _, _) ->
+        begin match ty with
+          | I1 | I64 | Ptr _ -> ()
+          | _ -> raise TypeError
+        end
+    | Load (ty, op) ->
+        begin match ty with
+          | Ptr I1 | Ptr I64 | Ptr (Ptr _) -> ()
+          | _ -> raise TypeError
+        end
+    | Call (ty, op, ops) -> ()
+    | Bitcast (ty1, op, ty2) -> ()
+    | Gep (ty, op, ops) -> ()
 
 
 let compile_insn ctxt (uid, i) : X86.ins list =
+  type_check i;
   match i with
-    | Binop (bop, ty, op1, op2) -> 
+    | Binop (bop, ty, op1, op2) ->
       compile_operand ctxt (Reg Rbx) op1 ::
       compile_operand ctxt (Reg Rcx) op2 ::
       begin match bop with
