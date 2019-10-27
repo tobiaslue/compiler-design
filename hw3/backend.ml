@@ -229,6 +229,22 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       Asm.(Set (compile_cnd cnd), [~%Rdx])::
       Asm.[Movq, [~%Rdx; lookup ctxt.layout uid]]
 
+    | Alloca ty ->
+      Asm.[Subq, [~$8; ~%Rsp]
+          ; Movq, [~%Rsp; lookup ctxt.layout uid]
+          ]
+    
+    | Load (ty, op) -> 
+      compile_operand ctxt (Reg Rcx) op ::
+      Asm.[Movq, [Ind2(Rcx); ~%Rbx]
+          ; Movq, [~%Rbx; lookup ctxt.layout uid]
+          ]
+
+    | Store (ty, op1, op2) -> 
+      compile_operand ctxt (Reg Rbx) op1 ::
+      compile_operand ctxt (Reg Rcx) op2 ::
+      Asm.[Movq, [~%Rbx; Ind2(Rcx)]]
+
     | _ -> failwith "compile_insn unimplemented"
 
 
@@ -246,10 +262,9 @@ let compile_insn ctxt (uid, i) : X86.ins list =
    - Cbr branch should treat its operand as a boolean conditional
 *)
 let compile_terminator ctxt t =
-  let l = List.length ctxt.layout in
   match t with
     | Ret (ty, op) ->  
-      let epilogue = Asm.([Addq, [~$(l*8); ~%Rsp]
+      let epilogue = Asm.([Movq, [~%Rbp; ~%Rsp]
                           ; Popq, [~%Rbp]
                           ; Retq, []
                           ])
