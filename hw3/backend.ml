@@ -270,6 +270,10 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       compile_operand ctxt (Reg Rcx) op2 ::
       Asm.[Movq, [~%Rbx; Ind2(Rcx)]]
 
+    | Bitcast (ty1, op, ty2) ->
+      compile_operand ctxt (Reg Rbx) op :: 
+      Asm.[Movq, [~%Rbx; lookup ctxt.layout uid]]
+
     | _ -> failwith "compile_insn unimplemented"
 
 
