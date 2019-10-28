@@ -298,6 +298,10 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       compile_operand ctxt (Reg Rbx) op :: 
       Asm.[Movq, [~%Rbx; lookup ctxt.layout uid]]
 
+    | Call (typ, op, args) -> compile_call ctxt (typ, op) (List.map get_op args) @
+                              [Movq, [(Reg Rax); (lookup ctxt.layout uid)]]
+
+
     | _ -> failwith "compile_insn unimplemented"
 
 
