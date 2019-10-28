@@ -88,6 +88,8 @@ let lookup m x = List.assoc x m
    the X86 instruction that moves an LLVM operand into a designated
    destination (usually a register).
 *)
+
+
 let compile_operand ctxt dest : Ll.operand -> ins = function
   | Null -> Movq, [Imm(Lit 0L); dest]
   | Const x -> Movq, [Imm(Lit x); dest]
@@ -95,15 +97,19 @@ let compile_operand ctxt dest : Ll.operand -> ins = function
   | Id uid -> Movq, [lookup ctxt.layout uid; dest]
 
 
-let move_args ctxt (i: int) (arg: Ll.operand) : ins =
+let move_args ctxt (i: int) (arg: Ll.operand) : ins list =
+  let offset = 8 * ((List.length ctxt.layout) + 1) in
   begin match i with
-    |0 -> (compile_operand ctxt (Reg Rdi)) arg
-    |1 -> (compile_operand ctxt (Reg Rsi)) arg
-    |2 -> (compile_operand ctxt (Reg Rdx)) arg
-    |3 -> (compile_operand ctxt (Reg Rcx)) arg
-    |4 -> (compile_operand ctxt (Reg R08)) arg
-    |5 -> (compile_operand ctxt (Reg R09)) arg
-    |n -> (compile_operand ctxt (Ind3 (Lit (Int64.of_int ((i-4)*8)), Rbp))) arg
+    |0 -> [(compile_operand ctxt (Reg Rdi)) arg]
+    |1 -> [(compile_operand ctxt (Reg Rsi)) arg]
+    |2 -> [(compile_operand ctxt (Reg Rdx)) arg]
+    |3 -> [(compile_operand ctxt (Reg Rcx)) arg]
+    |4 -> [(compile_operand ctxt (Reg R08)) arg]
+    |5 -> [(compile_operand ctxt (Reg R09)) arg]
+    |n -> [Subq, [Imm (Lit 8L); Reg Rsp]] @
+          [(compile_operand ctxt (Reg R15)) arg] @
+          [Movq, [(Reg R15); (Ind3(Lit (Int64.neg (Int64.of_int (offset + 8 * (n - 6)))), Rbp))]]
+(*[(compile_operand ctxt (Ind3(Lit (Int64.neg (Int64.of_int (offset + 8 * (n - 6)))), Rbp))) arg]*)
   end
 
 (* compiling call  ---------------------------------------------------------- *)
@@ -127,9 +133,9 @@ let move_args ctxt (i: int) (arg: Ll.operand) : ins =
 *)
 let compile_call ctxt fop args : X86.ins list=
   let op = match fop with typ, op -> op in
-  List.mapi (move_args ctxt) args @
-  [(compile_operand ctxt (Reg Rcx)) op] @
-  [Callq, [Reg Rcx]]
+  List.flatten (List.mapi (move_args ctxt) args) @
+  [(compile_operand ctxt (Reg R15)) op] @
+  [Callq, [Reg R15]]
 
 
 
@@ -310,16 +316,16 @@ let compile_lbl_block ctxt (lbl, blk) : elem =
 
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
+
 let arg_loc (n : int) : operand =
   match n with
-    | 0 -> (Reg Rdi)
-    | 1 -> (Reg Rsi)
-    | 2 -> (Reg Rdx)
-    | 3 -> (Reg Rcx)
-    | 4 -> (Reg R08)
-    | 5 -> (Reg R09)
-    | n ->  Ind3 (Lit (Int64.of_int ((n-4)*8)), Rbp)
-
+  | 0 -> (Reg Rdi)
+  | 1 -> (Reg Rsi)
+  | 2 -> (Reg Rdx)
+  | 3 -> (Reg Rcx)
+  | 4 -> (Reg R08)
+  | 5 -> (Reg R09)
+  | n ->  Ind3 (Lit (Int64.of_int ((n-4)*8)), Rbp)
 
 (* We suggest that you create a helper function that computes the
    stack layout for a given function declaration.
@@ -347,7 +353,10 @@ let function_prologue : X86.ins list =
         ; Movq, [~%Rsp; ~%Rbp]
         ])
 
-
+let asm_of_arg layout i uid : ins list=
+  if i < 6 then Asm.([Movq, [arg_loc i; lookup layout uid]])
+  else [Movq, [arg_loc i; Reg R15]] @
+       [Movq, [Reg R15; lookup layout uid]]
 (* The code for the entry-point of a function must do several things:
 
    - since our simple compiler maps local %uids to stack slots,
@@ -366,8 +375,8 @@ let function_prologue : X86.ins list =
 *)
 let compile_fdecl tdecls name { f_ty; f_param; f_cfg } =
   let layout = stack_layout f_param f_cfg in
-  let asm_of_arg = fun i uid -> Asm.([Movq, [arg_loc i; lookup layout uid]]) in
-  let asm_of_args = List.flatten @@ List.mapi asm_of_arg f_param in
+  (*let asm_of_arg = fun i uid -> Asm.([Movq, [arg_loc i; lookup layout uid]]) in*)
+  let asm_of_args = List.flatten @@ List.mapi (asm_of_arg layout) f_param in
   let reserve_space = fun i -> if i > 0 then Asm.[Subq, [~$(i*8); ~%Rsp]] else [] in
   let ctxt = {tdecls; layout} in
   let block = compile_block ctxt (fst f_cfg) in
