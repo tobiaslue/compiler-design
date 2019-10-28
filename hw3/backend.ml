@@ -164,10 +164,12 @@ let compile_call ctxt fop args : X86.ins list=
      Your function should simply return 0 in those cases
 *)
 let rec size_ty tdecls t : int =
-failwith "size_ty not implemented"
-
-
-
+  match t with
+    | Void | I8 | Fun _ -> 0
+    | I1 | I64 | Ptr _ -> 8
+    | Struct tys -> List.fold_left (fun acc x -> acc + (size_ty tdecls x)) 0 tys
+    | Array (i, ty) -> i * (size_ty tdecls ty)
+    | Namedt tid -> size_ty tdecls (lookup tdecls tid)
 
 
 (* Generates code that computes a pointer value.
