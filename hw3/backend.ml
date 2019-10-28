@@ -233,10 +233,10 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       compile_operand ctxt (Reg Rbx) op1 ::
       compile_operand ctxt (Reg Rcx) op2 ::
       begin match bop with
-        | Add -> Asm.(Addq, [~%Rcx; ~%Rbx])
+        | Add -> Asm.(Addq, [~%Rcx; ~%Rbx]) (*Change rcx to other register because rcx is argument register*)
         | Sub -> Asm.(Subq, [~%Rcx; ~%Rbx])
         | Mul -> Asm.(Imulq, [~%Rcx; ~%Rbx])
-        | Shl -> Asm.(Shlq, [~%Rcx; ~%Rbx])
+        | Shl -> Asm.(Shlq, [~%Rcx; ~%Rbx])(*first operand of shl cant be arbitrary register*)
         | Lshr -> Asm.(Shrq, [~%Rcx; ~%Rbx])
         | Ashr -> Asm.(Sarq, [~%Rcx; ~%Rbx])
         | And -> Asm.(Andq, [~%Rcx; ~%Rbx])
