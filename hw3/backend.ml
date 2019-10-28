@@ -97,7 +97,7 @@ let compile_operand ctxt dest : Ll.operand -> ins = function
   | Id uid -> Movq, [lookup ctxt.layout uid; dest]
 
 
-let move_args ctxt (i: int) (arg: Ll.operand) : ins list =
+let move_args ctxt (length: int)(i: int) (arg: Ll.operand) : ins list =
   let offset = 8 * ((List.length ctxt.layout) + 1) in
   begin match i with
     |0 -> [(compile_operand ctxt (Reg Rdi)) arg]
@@ -108,7 +108,7 @@ let move_args ctxt (i: int) (arg: Ll.operand) : ins list =
     |5 -> [(compile_operand ctxt (Reg R09)) arg]
     |n -> [Subq, [Imm (Lit 8L); Reg Rsp]] @
           [(compile_operand ctxt (Reg R15)) arg] @
-          [Movq, [(Reg R15); (Ind3(Lit (Int64.neg (Int64.of_int (offset + 8 * (n - 6)))), Rbp))]]
+          [Movq, [(Reg R15); (Ind3(Lit (Int64.neg (Int64.of_int (offset - 8 * (n - 6) + 8 * (length - 7)))), Rbp))]]
 (*[(compile_operand ctxt (Ind3(Lit (Int64.neg (Int64.of_int (offset + 8 * (n - 6)))), Rbp))) arg]*)
   end
 
@@ -133,7 +133,7 @@ let move_args ctxt (i: int) (arg: Ll.operand) : ins list =
 *)
 let compile_call ctxt fop args : X86.ins list=
   let op = match fop with typ, op -> op in
-  List.flatten (List.mapi (move_args ctxt) args) @
+  List.flatten (List.mapi (move_args ctxt (List.length args)) args) @
   [(compile_operand ctxt (Reg R15)) op] @
   [Callq, [Reg R15]]
 
@@ -229,9 +229,9 @@ let get_op arg : Ll.operand =
 *)
 exception TypeError
 
-let type_check (i:insn) : unit = 
+let type_check (i:insn) : unit =
   match i with
-    | Binop (_, ty, _, _) -> 
+    | Binop (_, ty, _, _) ->
       begin match ty with
         | I64 -> ()
         | _ -> raise TypeError
@@ -257,6 +257,7 @@ let compile_insn ctxt (uid, i) : X86.ins list =
   type_check i;
   match i with
     | Binop (bop, ty, op1, op2) ->
+      (Movq, [Reg Rcx; Reg R14]) ::
       compile_operand ctxt (Reg Rbx) op1 ::
       compile_operand ctxt (Reg Rcx) op2 ::
       begin match bop with
@@ -270,6 +271,7 @@ let compile_insn ctxt (uid, i) : X86.ins list =
         | Or -> Asm.(Orq, [~%Rcx; ~%Rbx])
         | Xor -> Asm.(Xorq, [~%Rcx; ~%Rbx])
       end ::
+      (Movq, [Reg R14; Reg Rcx]) ::
       Asm.[Movq, [~%Rbx; lookup ctxt.layout uid]]
 
     | Icmp (cnd, ty, op1, op2) ->
@@ -284,24 +286,25 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       Asm.[Subq, [~$8; ~%Rsp]
           ; Movq, [~%Rsp; lookup ctxt.layout uid]
           ]
-    
-    | Load (ty, op) -> 
+
+    | Load (ty, op) ->
       compile_operand ctxt (Reg Rcx) op ::
       Asm.[Movq, [Ind2(Rcx); ~%Rbx]
           ; Movq, [~%Rbx; lookup ctxt.layout uid]
           ]
 
-    | Store (ty, op1, op2) -> 
+    | Store (ty, op1, op2) ->
       compile_operand ctxt (Reg Rbx) op1 ::
       compile_operand ctxt (Reg Rcx) op2 ::
       Asm.[Movq, [~%Rbx; Ind2(Rcx)]]
 
     | Bitcast (ty1, op, ty2) ->
-      compile_operand ctxt (Reg Rbx) op :: 
+      compile_operand ctxt (Reg Rbx) op ::
       Asm.[Movq, [~%Rbx; lookup ctxt.layout uid]]
 
-    | Call (typ, op, args) -> compile_call ctxt (typ, op) (List.map get_op args) @
-                              [Movq, [(Reg Rax); (lookup ctxt.layout uid)]]
+    | Call (typ, op, args) ->
+      compile_call ctxt (typ, op) (List.map get_op args) @
+      [Movq, [(Reg Rax); (lookup ctxt.layout uid)]]
 
 
     | _ -> failwith "compile_insn unimplemented"
@@ -322,7 +325,7 @@ let compile_insn ctxt (uid, i) : X86.ins list =
 *)
 let compile_terminator ctxt t =
   match t with
-    | Ret (ty, op) ->  
+    | Ret (ty, op) ->
       let epilogue = Asm.([Movq, [~%Rbp; ~%Rsp]
                           ; Popq, [~%Rbp]
                           ; Retq, []
