@@ -201,11 +201,36 @@ failwith "compile_gep not implemented"
 
    - Bitcast: does nothing interesting at the assembly level
 *)
+exception TypeError
+
+let type_check (i:insn) : unit = 
+  match i with
+    | Binop (_, ty, _, _) -> 
+      begin match ty with
+        | I64 -> ()
+        | _ -> raise TypeError
+      end
+    | Icmp (_, ty, _, _)  (* simple types *)
+    | Alloca ty
+    | Store (ty, _, _) ->
+        begin match ty with
+          | I1 | I64 | Ptr _ -> ()
+          | _ -> raise TypeError
+        end
+    | Load (ty, op) ->
+        begin match ty with
+          | Ptr I1 | Ptr I64 | Ptr (Ptr _) -> ()
+          | _ -> raise TypeError
+        end
+    | Call (ty, op, ops) -> ()
+    | Bitcast (ty1, op, ty2) -> ()
+    | Gep (ty, op, ops) -> ()
 
 
 let compile_insn ctxt (uid, i) : X86.ins list =
+  type_check i;
   match i with
-    | Binop (bop, ty, op1, op2) -> 
+    | Binop (bop, ty, op1, op2) ->
       compile_operand ctxt (Reg Rbx) op1 ::
       compile_operand ctxt (Reg Rcx) op2 ::
       begin match bop with
@@ -229,6 +254,26 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       Asm.(Set (compile_cnd cnd), [~%Rdx])::
       Asm.[Movq, [~%Rdx; lookup ctxt.layout uid]]
 
+    | Alloca ty ->
+      Asm.[Subq, [~$8; ~%Rsp]
+          ; Movq, [~%Rsp; lookup ctxt.layout uid]
+          ]
+    
+    | Load (ty, op) -> 
+      compile_operand ctxt (Reg Rcx) op ::
+      Asm.[Movq, [Ind2(Rcx); ~%Rbx]
+          ; Movq, [~%Rbx; lookup ctxt.layout uid]
+          ]
+
+    | Store (ty, op1, op2) -> 
+      compile_operand ctxt (Reg Rbx) op1 ::
+      compile_operand ctxt (Reg Rcx) op2 ::
+      Asm.[Movq, [~%Rbx; Ind2(Rcx)]]
+
+    | Bitcast (ty1, op, ty2) ->
+      compile_operand ctxt (Reg Rbx) op :: 
+      Asm.[Movq, [~%Rbx; lookup ctxt.layout uid]]
+
     | _ -> failwith "compile_insn unimplemented"
 
 
@@ -246,10 +291,9 @@ let compile_insn ctxt (uid, i) : X86.ins list =
    - Cbr branch should treat its operand as a boolean conditional
 *)
 let compile_terminator ctxt t =
-  let l = List.length ctxt.layout in
   match t with
     | Ret (ty, op) ->  
-      let epilogue = Asm.([Addq, [~$(l*8); ~%Rsp]
+      let epilogue = Asm.([Movq, [~%Rbp; ~%Rsp]
                           ; Popq, [~%Rbp]
                           ; Retq, []
                           ])
