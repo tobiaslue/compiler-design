@@ -197,9 +197,9 @@ let rec size_ty tdecls t : int =
       in (4), but relative to the type f the sub-element picked out
       by the path so far
 *)
-let gep_array ctxt ty op insn : (Ll.ty * ins list) = 
+let gep_array ctxt ty op insn : (Ll.ty * ins list) =
   let ins = compile_operand ctxt (Reg R10) op ::
-            Asm.[Imulq, [~$((size_ty ctxt.tdecls ty)*8); ~%R10]
+            Asm.[Imulq, [~$(size_ty ctxt.tdecls ty); ~%R10]
                 ; Addq, [~%R10; ~%Rcx]]
   in
   (ty, insn @ ins)
