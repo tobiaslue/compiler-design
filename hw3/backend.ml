@@ -197,12 +197,49 @@ let rec size_ty tdecls t : int =
       in (4), but relative to the type f the sub-element picked out
       by the path so far
 *)
+let gep_array ctxt ty op insn : (Ll.ty * ins list) = 
+  let ins = compile_operand ctxt (Reg R10) op ::
+            Asm.[Imulq, [~$((size_ty ctxt.tdecls ty)*8); ~%R10]
+                ; Addq, [~%R10; ~%Rcx]]
+  in
+  (ty, insn @ ins)
+
+
+let gep_struct ctxt tys op insn : (Ll.ty * ins list) = failwith "unimplemented"
+
+let gep_namedt ctxt tid op insn : (Ll.ty * ins list) = 
+  let t = lookup ctxt.tdecls tid in
+  match t with 
+    | Struct tys -> gep_struct ctxt tys op insn
+    | Array (n, ty) -> gep_array ctxt ty op insn
+    | _ -> invalid_arg "gep_namedt: must be of type Struct or Array"
+
 let compile_gep ctxt (op : Ll.ty * Ll.operand) (path: Ll.operand list) : ins list =
-failwith "compile_gep not implemented"
+  let base = compile_operand ctxt (Reg Rcx) (snd op) in
+  let index = compile_operand ctxt (Reg R10) (List.hd path) in
+  let path = List.tl path in
+
+  let f = fun (t, insn) op -> match t with
+    | Struct tys -> gep_struct ctxt tys op insn
+    | Array (n, ty) -> gep_array ctxt ty op insn
+    | Namedt tid -> gep_namedt ctxt tid op insn
+    | _ -> invalid_arg "compile_gep: must be of type Struct, Array or Namedt"
+  in
+  let t = match (fst op) with
+    | Ptr x -> x
+    | _ -> failwith "compile_gep: must have type Ptr _"
+  in
+
+  let (_, ins) = List.fold_left f (t, []) path in
+
+  base ::
+  index ::
+  Asm.[Imulq, [~$((size_ty ctxt.tdecls t)*8); ~%R10]
+      ; Addq, [~%R10; ~%Rcx]] @
+  ins
 
 
-let get_op arg : Ll.operand =
-  match arg with _, op -> op
+
 
 (* compiling instructions  -------------------------------------------------- *)
 
@@ -303,11 +340,11 @@ let compile_insn ctxt (uid, i) : X86.ins list =
       Asm.[Movq, [~%Rbx; lookup ctxt.layout uid]]
 
     | Call (typ, op, args) ->
-      compile_call ctxt (typ, op) (List.map get_op args) @
+      compile_call ctxt (typ, op) (List.map snd args) @
       [Movq, [(Reg Rax); (lookup ctxt.layout uid)]]
 
-
-    | _ -> failwith "compile_insn unimplemented"
+    | Gep (ty, op, ops) -> compile_gep ctxt (ty, op) ops @
+      Asm.[Movq, [~%Rcx; lookup ctxt.layout uid]]
 
 
 
