@@ -204,8 +204,20 @@ let gep_array ctxt ty op insn : (Ll.ty * ins list) =
   in
   (ty, insn @ ins)
 
+let rec struct_size ctxt tys index : int =
+  match (tys, index) with
+    | (_, 0) -> 0
+    | ([], n) -> failwith "struct_size: invalid index"
+    | (t::ts, n) -> (size_ty ctxt.tdecls t) + (struct_size ctxt ts (n-1))
 
-let gep_struct ctxt tys op insn : (Ll.ty * ins list) = failwith "unimplemented"
+let gep_struct ctxt tys op insn : (Ll.ty * ins list) = 
+  let index = match op with
+    | Const x -> Int64.to_int x
+    | _ -> invalid_arg "gep_struct: operand must be of type const"
+  in
+  let ty = List.nth tys index in
+  let ins = Asm.[Addq, [~$(struct_size ctxt tys index); ~%Rcx]] in
+  (ty, insn @ ins)
 
 let gep_namedt ctxt tid op insn : (Ll.ty * ins list) = 
   let t = lookup ctxt.tdecls tid in
