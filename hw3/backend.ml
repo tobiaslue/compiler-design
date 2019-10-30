@@ -246,7 +246,7 @@ let compile_gep ctxt (op : Ll.ty * Ll.operand) (path: Ll.operand list) : ins lis
 
   base ::
   index ::
-  Asm.[Imulq, [~$((size_ty ctxt.tdecls t)*8); ~%R10]
+  Asm.[Imulq, [~$(size_ty ctxt.tdecls t); ~%R10]
       ; Addq, [~%R10; ~%Rcx]] @
   ins
 
