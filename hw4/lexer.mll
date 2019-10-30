@@ -53,6 +53,19 @@
   ( ")", RPAREN);
   ( "[", LBRACKET);
   ( "]", RBRACKET);
+
+  ( "<<",  SHLEFT);
+  ( ">>",  SHRIGHT);
+  ( ">>>", SARIGHT);
+  ( "<",   LESS);
+  ( "<=",  LEQ);
+  ( ">",   GREATER);
+  ( ">=",  GEQ);
+  ( "!=",  NEQ);
+  ( "&",   AND);
+  ( "|",   OR);
+  ( "[&]", BAND);
+  ( "[|]", BOR);
   
   ]
 
@@ -128,7 +141,9 @@ rule token = parse
   | newline { newline lexbuf; token lexbuf }
 
   | ';' | ',' | '{' | '}' | '+' | '-' | '*' | '=' | "==" 
-  | "!=" | '!' | '~' | '(' | ')' | '[' | ']' 
+  | "!=" | '!' | '~' | '(' | ')' | '[' | ']' | "<<" | ">>"
+  | ">>>" | '<' | "<=" | '>' | ">=" | "!=" | '&' | '|'
+  | "[&]" | "[|]"
     { create_token lexbuf }
 
   | _ as c { unexpected_char lexbuf c }
