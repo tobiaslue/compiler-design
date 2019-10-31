@@ -36,6 +36,11 @@
   ("return", RETURN);
   ("var", VAR);
   ("global", GLOBAL);
+  ("bool", TBOOL);
+  ("true", TRUE);
+  ("false", FALSE);
+  ("new", NEW);
+  ("for", FOR);
 
   (* Symbols *)
   ( ";", SEMI);
@@ -69,7 +74,7 @@
   
   ]
 
-let (symbol_table : (string, Parser.token) Hashtbl.t) = Hashtbl.create 1024
+  let (symbol_table : (string, Parser.token) Hashtbl.t) = Hashtbl.create 1024
   let _ =
     List.iter (fun (str,t) -> Hashtbl.add symbol_table str t) reserved_words
 
