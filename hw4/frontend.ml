@@ -156,8 +156,6 @@ let oat_alloc_array (t:Ast.ty) (size:Ll.operand) : Ll.ty * operand * stream =
     ; ans_id, Bitcast(arr_ty, Id arr_id, ans_ty) ]
 
 
-
-
 (* Compiles an expression exp in context c, outputting the Ll operand that will
    recieve the value of the expression, and the stream of instructions
    implementing the expression.
@@ -179,7 +177,41 @@ let oat_alloc_array (t:Ast.ty) (size:Ll.operand) : Ll.ty * operand * stream =
 
 *)
 let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
-  failwith "cmp_exp unimplemented"
+  begin match exp.elt with
+    |CBool true -> I1, Const 1L, []
+    |CBool false -> I1, Const 0L, []
+    |CInt x -> I64, Const x, []
+    |Bop (op, x1, x2) ->
+      let (ty1, op1, s1) = cmp_exp c x1 in
+      let (ty2, op2, s2) = cmp_exp c x2 in
+      let var = (gensym "x") in
+      begin match op with
+        |Add -> I64, Id var, [E (var, (Binop (Add, I64, op1, op2)))] @ s2 @ s1
+        |Sub -> I64, Id var, [E (var, (Binop (Sub, I64, op1, op2)))] @ s2 @ s1
+        |Mul -> I64, Id var, [E (var, (Binop (Mul, I64, op1, op2)))] @ s2 @ s1
+        |Eq -> I1, Id var, [E (var, (Icmp (Eq, I1, op1, op2)))] @ s2 @ s1
+        |Neq -> I1, Id var, [E (var, (Icmp (Ne, I1, op1, op2)))] @ s2 @ s1
+        |Lt -> I1, Id var, [E (var, (Icmp (Slt, I1, op1, op2)))] @ s2 @ s1
+        |Lte -> I1, Id var, [E (var, (Icmp (Sle, I1, op1, op2)))] @ s2 @ s1
+        |Gt -> I1, Id var, [E (var, (Icmp (Sgt, I1, op1, op2)))] @ s2 @ s1
+        |Gte -> I1, Id var, [E (var, (Icmp (Sge, I1, op1, op2)))] @ s2 @ s1
+        |Shl -> I64, Id var, [E (var, (Binop (Shl, I64, op1, op2)))] @ s2 @ s1
+        |Shr -> I64, Id var, [E (var, (Binop (Lshr, I64, op1, op2)))] @ s2 @ s1
+        |Sar -> I64, Id var, [E (var, (Binop (Ashr, I64, op1, op2)))] @ s2 @ s1
+        |_ -> invalid_arg "bop not implemented"
+      end
+    |Uop (op, x) ->
+      let (ty, op1, s) = cmp_exp c x in
+      let var = (gensym "x") in
+      begin match op with
+        |Neg -> I64, Id var, [E (var, (Binop (Mul, I64, op1, Const (Int64.neg 1L))))] @ s
+        |_ -> invalid_arg "uop not implemented"
+      end
+    |Id x ->
+      let (ty, op) = Ctxt.lookup x c in
+      ty, op, []
+    |_ -> invalid_arg "expression not implemented"
+  end
 
 
 (* Compile a statement in context c with return typ rt. Return a new context,
@@ -209,7 +241,17 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
 
  *)
 let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
-  failwith "cmp_stmt not implemented"
+  begin match stmt.elt with
+    |Ret (Some x) ->
+      let (ty, op, stream) = cmp_exp c x in
+      (c, stream @ [T (Ret (ty, Some op))])
+    |Decl (id, e) ->
+      let (ty, op, stream) = cmp_exp c e in
+      Ctxt.add c id (ty, op),
+      [E (id, (Store (ty, op, (Id id))))] @ [E (id, (Alloca ty))] @ stream
+    |While (a, b) -> c, []
+    |_ -> invalid_arg "statement not implemented"
+  end
 
 
 (* Compile a series of statements *)
@@ -248,7 +290,7 @@ let type_of (exp: exp node) : Ll.ty =
 
   let make_c c decl : Ctxt.t =
     begin match decl with
-      |Gvdecl gdecl -> Ctxt.add c gdecl.elt.name ((type_of gdecl.elt.init), Gid "x")
+      |Gvdecl gdecl -> Ctxt.add c gdecl.elt.name ((type_of gdecl.elt.init), Gid (gdecl.elt.name))
       |_ -> invalid_arg "filter did not work"
     end
 (* Populate a context with bindings for global variables
@@ -272,6 +314,19 @@ let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
 
 let make_alloca (i: int) arg : (uid * insn) =
   (Pervasives.string_of_int (i + 1), Alloca I64)
+
+let make_store c (i: int) arg : (uid * insn) =
+  let id = match arg with _, id -> id in
+  Ctxt.add c id (I64, (Id (Pervasives.string_of_int (i + 1))));
+  let arg = (Const 10L) in
+  ("", Store (I64, arg, (Id (Pervasives.string_of_int (i + 1)))))
+
+
+
+
+let make_stmts return_type (c, stream) stmt : (Ctxt.t * stream) =
+  let (c, s) = cmp_stmt c return_type stmt in
+  c, s @ stream
 (* Compile a function declaration in global context c. Return the LLVMlite cfg
    and a list of global declarations containing the string literals appearing
    in the function.
@@ -282,18 +337,21 @@ let make_alloca (i: int) arg : (uid * insn) =
    3. Extend the context with bindings for function variables
    3. Compile the body of the function using cmp_block
    4. Use cfg_of_stream to produce a LLVMlite cfg from
- *)
+*)
+
 let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) list =
-  (*let g = function (i, arg) -> (Pervasives.string_of_int i, Alloca I64) in*)
-  let alloca = List.mapi make_alloca f.elt.args in
-  let f = function (ty, op) -> op in
+  let first = function (x, _) -> x in
+  let second = function (_, x) -> x in
+  (*let alloca = List.mapi make_alloca f.elt.args in
+    let store = List.mapi (make_store c) f.elt.args in*)
+  let return_type = cmp_ret_ty f.elt.frtyp in
+  let arg_types = List.map cmp_ty (first (List.split f.elt.args)) in
+  let (c, stream) = List.fold_left (make_stmts return_type) (c, []) f.elt.body in
+  let (cfg, globals) = cfg_of_stream stream in
   {
-    f_ty = [I64], I64;
-    f_param = ["arg1"];
-    f_cfg = {
-      insns = alloca;
-      term = ("uid1", (Ret (I64, Some (f (Ctxt.lookup "x" c)))))
-    }, []
+    f_ty = arg_types, return_type;
+    f_param = List.map second f.elt.args;
+    f_cfg = cfg
   }, []
 
 
