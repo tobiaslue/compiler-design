@@ -186,28 +186,32 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
       let (ty2, op2, s2) = cmp_exp c x2 in
       let var = (gensym "x") in
       begin match op with
-        |Add -> I64, Id var, [E (var, (Binop (Add, I64, op1, op2)))] @ s2 @ s1
-        |Sub -> I64, Id var, [E (var, (Binop (Sub, I64, op1, op2)))] @ s2 @ s1
-        |Mul -> I64, Id var, [E (var, (Binop (Mul, I64, op1, op2)))] @ s2 @ s1
-        |Eq -> I1, Id var, [E (var, (Icmp (Eq, I1, op1, op2)))] @ s2 @ s1
-        |Neq -> I1, Id var, [E (var, (Icmp (Ne, I1, op1, op2)))] @ s2 @ s1
-        |Lt -> I1, Id var, [E (var, (Icmp (Slt, I1, op1, op2)))] @ s2 @ s1
-        |Lte -> I1, Id var, [E (var, (Icmp (Sle, I1, op1, op2)))] @ s2 @ s1
-        |Gt -> I1, Id var, [E (var, (Icmp (Sgt, I1, op1, op2)))] @ s2 @ s1
-        |Gte -> I1, Id var, [E (var, (Icmp (Sge, I1, op1, op2)))] @ s2 @ s1
-        |Shl -> I64, Id var, [E (var, (Binop (Shl, I64, op1, op2)))] @ s2 @ s1
-        |Shr -> I64, Id var, [E (var, (Binop (Lshr, I64, op1, op2)))] @ s2 @ s1
-        |Sar -> I64, Id var, [E (var, (Binop (Ashr, I64, op1, op2)))] @ s2 @ s1
-        |_ -> invalid_arg "bop not implemented"
+        |Add -> I64, Id var, [I (var, (Binop (Add, I64, op1, op2)))] @ s2 @ s1
+        |Sub -> I64, Id var, [I (var, (Binop (Sub, I64, op1, op2)))] @ s2 @ s1
+        |Mul -> I64, Id var, [I (var, (Binop (Mul, I64, op1, op2)))] @ s2 @ s1
+        |Eq -> I1, Id var, [I (var, (Icmp (Eq, I64, op1, op2)))] @ s2 @ s1
+        |Neq -> I1, Id var, [I (var, (Icmp (Ne, I64, op1, op2)))] @ s2 @ s1
+        |Lt -> I1, Id var, [I (var, (Icmp (Slt, I64, op1, op2)))] @ s2 @ s1
+        |Lte -> I1, Id var, [I (var, (Icmp (Sle, I64, op1, op2)))] @ s2 @ s1
+        |Gt -> I1, Id var, [I (var, (Icmp (Sgt, I64, op1, op2)))] @ s2 @ s1
+        |Gte -> I1, Id var, [I (var, (Icmp (Sge, I64, op1, op2)))] @ s2 @ s1
+        |And -> I1, Id var, [I (var, (Binop (And, I1, op1, op2)))] @ s2 @ s1
+        |Or -> I1, Id var, [I (var, (Binop (Or, I1, op1, op2)))] @ s2 @ s1
+        |IAnd -> I64, Id var, [I (var, (Binop (And, I64, op1, op2)))] @ s2 @ s1
+        |IOr -> I64, Id var, [I (var, (Binop (Or, I64, op1, op2)))] @ s2 @ s1
+        |Shl -> I64, Id var, [I (var, (Binop (Shl, I64, op1, op2)))] @ s2 @ s1
+        |Shr -> I64, Id var, [I (var, (Binop (Lshr, I64, op1, op2)))] @ s2 @ s1
+        |Sar -> I64, Id var, [I (var, (Binop (Ashr, I64, op1, op2)))] @ s2 @ s1
       end
     |Uop (op, x) ->
       let (ty, op1, s) = cmp_exp c x in
       let var = (gensym "x") in
       begin match op with
-        |Neg -> I64, Id var, [E (var, (Binop (Mul, I64, op1, Const (Int64.neg 1L))))] @ s
-        |_ -> invalid_arg "uop not implemented"
+        |Neg -> I64, Id var, [I (var, (Binop (Mul, I64, op1, Const (Int64.neg 1L))))] @ s
+        |Lognot -> I1, Id var, [I (var, (Binop (Xor, I1, op1, Const (Int64.one))))] @ s
+        |Bitnot -> I64, Id var, [I (var, (Binop (Xor, I64, op1, Const (Int64.minus_one))))] @ s
       end
-    |Id x ->
+    |Id x -> (*Should return pointer to variable, not value of variable*)
       let (ty, op) = Ctxt.lookup x c in
       ty, op, []
     |_ -> invalid_arg "expression not implemented"
@@ -238,18 +242,41 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
    - compiling the left-hand-side of an assignment is almost exactly like
      compiling the Id or Index expression. Instead of loading the resulting
      pointer, you just need to store to it!
+     let (c, stream) = List.fold_left (make_stmts return_type) (c, []) f.elt.body in
 
  *)
 let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
+  let make_stmts return_type (c, stream) stmt : (Ctxt.t * stream) =
+    let (c, s) = cmp_stmt c return_type stmt in
+    c, s @ stream in
   begin match stmt.elt with
-    |Ret (Some x) ->
-      let (ty, op, stream) = cmp_exp c x in
-      (c, stream @ [T (Ret (ty, Some op))])
+    |Ret (Some e) ->
+      let (ty, op, stream) = cmp_exp c e in
+      (c, [T (Ret (ty, Some op))] @ stream)
     |Decl (id, e) ->
       let (ty, op, stream) = cmp_exp c e in
       Ctxt.add c id (ty, op),
-      [E (id, (Store (ty, op, (Id id))))] @ [E (id, (Alloca ty))] @ stream
-    |While (a, b) -> c, []
+      [I (id, (Store (ty, op, (Id id))))] @ [E (id, (Alloca ty))] @ stream
+    |If (e, s1, s2) ->
+      let (ty, op, stream) = cmp_exp c e in
+      let if_lbl = gensym "if" in
+      let else_lbl = gensym "else" in
+      let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s1 in
+      let (c, stream2) = List.fold_left (make_stmts rt) (c, []) s2 in
+      c, stream1 @ [L if_lbl] @
+         stream2 @ [L else_lbl] @
+         [T (Cbr (op, if_lbl, else_lbl))] @ stream
+    |While (e, s) ->
+      let (ty, op, stream) = cmp_exp c e in
+      let loop_lbl = gensym "loop" in
+      let end_lbl = gensym "end" in
+      let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s in
+      c, [L end_lbl] @
+         [T (Cbr (op, loop_lbl, end_lbl))] @ stream @
+         stream1 @ [L loop_lbl] @ [T (Cbr (op, loop_lbl, end_lbl))] @ stream (*uid in stream equal to uid in previous line*)
+    |Assn (le, re) ->
+      let (ty, op, stream) = cmp_exp c re in (*evaluate le and store op in le instead of var. Fix expression id first*)
+      c, []
     |_ -> invalid_arg "statement not implemented"
   end
 
