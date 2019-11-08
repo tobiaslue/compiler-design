@@ -267,9 +267,16 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
       let else_lbl = gensym "else" in
       let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s1 in
       let (c, stream2) = List.fold_left (make_stmts rt) (c, []) s2 in
-      c, stream1 @ [L if_lbl] @
-         stream2 @ [L else_lbl] @
-         [T (Cbr (op, if_lbl, else_lbl))] @ stream
+      begin match s2 with
+        |[] ->
+          c, stream2 @ [L else_lbl] @
+             [T (Br else_lbl)] @ stream1 @ [L if_lbl] @
+             [T (Cbr (op, if_lbl, else_lbl))] @ stream
+        |_ ->
+          c, stream2 @ [L else_lbl] @
+             stream1 @ [L if_lbl] @
+             [T (Cbr (op, if_lbl, else_lbl))] @ stream
+      end
     |While (e, s) ->
       let (ty, op, stream) = cmp_exp c e in
       let cnd_lbl = gensym "cnd" in
@@ -323,21 +330,6 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
                  [T (Br cnd_lbl)] in
 
       c, loop @ decl
-
-      (*Increment*)
-
-
-
-
-(*
-
-
-      let e = match e with Some x -> x in
-      let inc = match inc with Some x -> x in
-      let (c, decl) = cmp_stmt c rt (no_loc (Decl (List.hd vdecl))) in
-      let (c, loop) = cmp_stmt c rt (no_loc (While (e, s))) in
-      let (c, s) =
-      c, loop @ decl*)
     |_ -> invalid_arg "statement not implemented"
   end
 
@@ -365,22 +357,6 @@ let cmp_function_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
     ) c p
 
 
-let type_of (exp: exp node) : Ll.ty =
-  begin match exp.elt with
-    |CNull _ -> Void
-    |CBool _ -> I64
-    |CInt _ -> I64
-    |CStr _ -> I64
-    |CArr _ -> failwith "array not implemented"
-    |_ -> invalid_arg "invalid type for global initializer"
-  end
-
-
-  let make_c c decl : Ctxt.t =
-    begin match decl with
-      |Gvdecl gdecl -> Ctxt.add c gdecl.elt.name ((type_of gdecl.elt.init), Gid (gdecl.elt.name))
-      |_ -> invalid_arg "filter did not work"
-    end
 (* Populate a context with bindings for global variables
    mapping OAT identifiers to LLVMlite gids and their types.
 
@@ -392,29 +368,25 @@ let type_of (exp: exp node) : Ll.ty =
 
 
 let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
-  let get_gdecls = function (decl:decl) ->
-    begin match decl with
-      |Gvdecl _ -> true
-      |Gfdecl _ -> false
-    end in
-  let p_global = List.filter get_gdecls p in
-  List.fold_left make_c c p_global
+  let f acc x = match x with
+    | Gvdecl g ->
+      let name = g.elt.name in
+      let init = g.elt.init.elt in
+      let bin =
+        begin match init with
+          | CNull ty -> (Ptr (cmp_ty ty), Gid name)
+          | CBool b -> (Ptr I1, Gid name)
+          | CInt i -> (Ptr I64, Gid name)
+          | CStr s -> (Ptr I8, Gid name)   (* TODO: not really sure about this *)
+          | CArr (ty, e) -> failwith "cmp_global_ctxt: CArr not implemented"
+          | _ -> failwith "cmp_global_ctxt: invalid type of global initializer"
+        end
+      in
+      Ctxt.add acc name bin
+    | _ -> acc
+  in
+  List.fold_left f c p
 
-let make_alloca (i: int) arg : (uid * insn) =
-  (Pervasives.string_of_int (i + 1), Alloca I64)
-
-let make_store c (i: int) arg : (uid * insn) =
-  let id = match arg with _, id -> id in
-  Ctxt.add c id (I64, (Id (Pervasives.string_of_int (i + 1))));
-  let arg = (Const 10L) in
-  ("", Store (I64, arg, (Id (Pervasives.string_of_int (i + 1)))))
-
-
-
-
-let make_stmts return_type (c, stream) stmt : (Ctxt.t * stream) =
-  let (c, s) = cmp_stmt c return_type stmt in
-  c, s @ stream
 (* Compile a function declaration in global context c. Return the LLVMlite cfg
    and a list of global declarations containing the string literals appearing
    in the function.
@@ -428,19 +400,20 @@ let make_stmts return_type (c, stream) stmt : (Ctxt.t * stream) =
 *)
 
 let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) list =
-  let first = function (x, _) -> x in
-  let second = function (_, x) -> x in
-  (*let alloca = List.mapi make_alloca f.elt.args in
-    let store = List.mapi (make_store c) f.elt.args in*)
-  let return_type = cmp_ret_ty f.elt.frtyp in
-  let arg_types = List.map cmp_ty (first (List.split f.elt.args)) in
-  let (c, stream) = List.fold_left (make_stmts return_type) (c, []) f.elt.body in
-  let (cfg, globals) = cfg_of_stream stream in
-  {
-    f_ty = arg_types, return_type;
-    f_param = List.map second f.elt.args;
-    f_cfg = cfg
-  }, []
+  let f = f.elt in
+  let f_ty = cmp_fty ((List.map fst f.args), f.frtyp) in
+  let f_param = List.map snd f.args in
+  let g = fun (c, acc) (ty, id) ->
+    let uid = gensym id in
+    let ty = cmp_ty ty in
+    let c = Ctxt.add c id (Ptr ty, Id uid) in
+    c, acc @ [E(uid, Alloca ty)] @ [I("", Store (ty, (Id id), (Id uid)))]
+  in
+  let (c, prologue) = List.fold_left g (c, []) f.args in
+  let body = cmp_block c (cmp_ret_ty f.frtyp) f.body in
+  let f_cfg, gs = cfg_of_stream @@ prologue @ body in
+  {f_ty; f_param; f_cfg}, gs
+
 
 
 (* Compile a global initializer, returning the resulting LLVMlite global
@@ -455,14 +428,13 @@ let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) lis
      be an array of pointers to arrays emitted as additional global declarations
 *)
 let rec cmp_gexp c (e:Ast.exp node) : Ll.gdecl * (Ll.gid * Ll.gdecl) list =
-  begin match e.elt with
-    |CNull x -> (Void, GNull), []
-    |CBool x -> (I64, GInt 0L), []
-    |CInt x -> (I64, GInt x), []
-    |CStr x ->(I64, GString ""), []
-    |CArr _ -> failwith "array not implemented"
-    |_ -> invalid_arg "invalid type of initializer"
-  end
+  match e.elt with
+  | CNull ty -> (cmp_ty ty, GNull), []
+  | CBool b -> (I1, GInt (if b then 1L else 0L)), []
+  | CInt i -> (I64, GInt i), []
+  | CStr s -> (Ptr I8, GString s), []
+  | CArr _ -> failwith "unimplemented"
+  | _ -> failwith "cmp_gexp: invalid type of global initializer"
 
 
 (* Oat internals function context ------------------------------------------- *)
