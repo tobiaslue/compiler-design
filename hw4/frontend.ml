@@ -184,7 +184,7 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
     |Bop (op, x1, x2) ->
       let (ty1, op1, s1) = cmp_exp c x1 in
       let (ty2, op2, s2) = cmp_exp c x2 in
-      let var = (gensym "x") in
+      let var = (gensym "") in
       begin match op with
         |Add -> I64, Id var, [I (var, (Binop (Add, I64, op1, op2)))] @ s2 @ s1
         |Sub -> I64, Id var, [I (var, (Binop (Sub, I64, op1, op2)))] @ s2 @ s1
@@ -205,7 +205,7 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
       end
     |Uop (op, x) ->
       let (ty, op1, s) = cmp_exp c x in
-      let var = (gensym "x") in
+      let var = (gensym "") in
       begin match op with
         |Neg -> I64, Id var, [I (var, (Binop (Mul, I64, op1, Const (Int64.neg 1L))))] @ s
         |Lognot -> I1, Id var, [I (var, (Binop (Xor, I1, op1, Const (Int64.one))))] @ s
@@ -213,7 +213,11 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
       end
     |Id x -> (*Should return pointer to variable, not value of variable*)
       let (ty, op) = Ctxt.lookup x c in
-      ty, op, []
+      let uid = gensym "" in
+      begin match ty with
+        |Ptr(ty) -> ty, Id(uid), [I(uid, Load(Ptr(ty), op))]
+        |_ -> invalid_arg "array not implemented"
+      end
     |_ -> invalid_arg "expression not implemented"
   end
 
@@ -242,7 +246,6 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
    - compiling the left-hand-side of an assignment is almost exactly like
      compiling the Id or Index expression. Instead of loading the resulting
      pointer, you just need to store to it!
-     let (c, stream) = List.fold_left (make_stmts return_type) (c, []) f.elt.body in
 
  *)
 let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
@@ -255,8 +258,9 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
       (c, [T (Ret (ty, Some op))] @ stream)
     |Decl (id, e) ->
       let (ty, op, stream) = cmp_exp c e in
-      Ctxt.add c id (ty, op),
-      [I (id, (Store (ty, op, (Id id))))] @ [E (id, (Alloca ty))] @ stream
+      let uid = gensym "" in
+      Ctxt.add c id (Ptr ty, Id uid),
+      [I ("", (Store (ty, op, (Id uid))))] @ [E (uid, (Alloca ty))] @ stream
     |If (e, s1, s2) ->
       let (ty, op, stream) = cmp_exp c e in
       let if_lbl = gensym "if" in
@@ -268,15 +272,72 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
          [T (Cbr (op, if_lbl, else_lbl))] @ stream
     |While (e, s) ->
       let (ty, op, stream) = cmp_exp c e in
-      let loop_lbl = gensym "loop" in
+      let cnd_lbl = gensym "cnd" in
       let end_lbl = gensym "end" in
+      let loop_lbl = gensym "loop" in
       let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s in
       c, [L end_lbl] @
-         [T (Cbr (op, loop_lbl, end_lbl))] @ stream @
-         stream1 @ [L loop_lbl] @ [T (Cbr (op, loop_lbl, end_lbl))] @ stream (*uid in stream equal to uid in previous line*)
+         [T (Br cnd_lbl)] @ stream1 @ [L loop_lbl] @
+         [T (Cbr (op, loop_lbl, end_lbl))] @ stream @ [L cnd_lbl] @
+         [T (Br cnd_lbl)]
     |Assn (le, re) ->
-      let (ty, op, stream) = cmp_exp c re in (*evaluate le and store op in le instead of var. Fix expression id first*)
-      c, []
+      let (tyr, opr, streamr) = cmp_exp c re in (*evaluate le and store op in le instead of var. Fix expression id first*)
+      begin match le.elt with
+        |Id id ->
+          let (tyl, opl) = Ctxt.lookup id c in
+          c, [I ("", Store (tyr, opr, opl))] @ streamr
+        |_ -> invalid_arg "array not implemented"
+      end
+    |For (vdecls, e, inc, s) ->
+      (*Declaration*)
+      let (id, edecl) = match (List.hd vdecls) with (id, e) -> id, e in
+      let (ty, op, stream) = cmp_exp c edecl in
+      let uid = gensym "" in
+      let c = Ctxt.add c id (Ptr ty, Id uid) in
+      let decl = [I ("", (Store (ty, op, (Id uid))))] @
+                 [E (uid, (Alloca ty))] @ stream in
+
+      (*Operations for increment*)
+      let inc = match inc with
+        |Some x -> x
+        |_ -> invalid_arg "invalid increment statement in for loop" in
+      let (le, re) = match inc.elt with
+        |Assn (le, re) -> le, re
+        |_ -> invalid_arg "Invalid increment statement in for loop" in
+      let (tyr, opr, streamr) = cmp_exp c re in
+      let (tyl, opl) = Ctxt.lookup id c in
+
+      (*While loop*)
+      let e = match e with
+        |Some x -> x
+        |_ -> invalid_arg "Invalid expression in for loop" in
+      let (ty, op, stream) = cmp_exp c e in
+      let cnd_lbl = gensym "cnd" in
+      let end_lbl = gensym "end" in
+      let loop_lbl = gensym "loop" in
+      let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s in
+      let loop = [L end_lbl] @ [T (Br cnd_lbl)] @
+                 [I ("", Store (tyr, opr, opl))] @ streamr @ (*increment*)
+                 stream1 @ [L loop_lbl] @
+                 [T (Cbr (op, loop_lbl, end_lbl))] @ stream @ [L cnd_lbl] @
+                 [T (Br cnd_lbl)] in
+
+      c, loop @ decl
+
+      (*Increment*)
+
+
+
+
+(*
+
+
+      let e = match e with Some x -> x in
+      let inc = match inc with Some x -> x in
+      let (c, decl) = cmp_stmt c rt (no_loc (Decl (List.hd vdecl))) in
+      let (c, loop) = cmp_stmt c rt (no_loc (While (e, s))) in
+      let (c, s) =
+      c, loop @ decl*)
     |_ -> invalid_arg "statement not implemented"
   end
 
