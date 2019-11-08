@@ -12,11 +12,11 @@ open Ast
      of the instruction stream. You will find this useful for compiling string
      literals
    - E of uid * insn: allows you to emit an instruction that will be moved up
-     to the entry block of the current function. This will be useful for 
+     to the entry block of the current function. This will be useful for
      compiling local variable declarations
 *)
 
-type elt = 
+type elt =
   | L of Ll.lbl             (* block labels *)
   | I of uid * Ll.insn      (* instruction *)
   | T of Ll.terminator      (* block terminators *)
@@ -35,7 +35,7 @@ let cfg_of_stream (code:stream) : Ll.cfg * (Ll.gid * Ll.gdecl) list  =
         match e with
         | L l ->
            begin match term_opt with
-           | None -> 
+           | None ->
               if (List.length insns) = 0 then (gs, einsns, [], None, blks)
               else failwith @@ Printf.sprintf "build_cfg: block labeled %s has\
                                                no terminator" l
@@ -49,8 +49,8 @@ let cfg_of_stream (code:stream) : Ll.cfg * (Ll.gid * Ll.gdecl) list  =
       ) ([], [], [], None, []) code
     in
     match term_opt with
-    | None -> failwith "build_cfg: entry block has no terminator" 
-    | Some term -> 
+    | None -> failwith "build_cfg: entry block has no terminator"
+    | Some term ->
        let insns = einsns @ insns in
        ({insns; term}, blks), gs
 
@@ -81,20 +81,20 @@ module Ctxt = struct
 
   let lookup_function_option (id:Ast.id) (c:t) : (Ll.ty * Ll.operand) option =
     try Some (lookup_function id c) with _ -> None
-  
+
 end
 
 (* compiling OAT types ------------------------------------------------------ *)
 
 (* The mapping of source types onto LLVMlite is straightforward. Booleans and ints
-   are represented as the the corresponding integer types. OAT strings are 
+   are represented as the the corresponding integer types. OAT strings are
    pointers to bytes (I8). Arrays are the most interesting type: they are
    represented as pointers to structs where the first component is the number
    of elements in the following array.
 
    The trickiest part of this project will be satisfying LLVM's rudimentary type
    system. Recall that global arrays in LLVMlite need to be declared with their
-   length in the type to statically allocate the right amount of memory. The 
+   length in the type to statically allocate the right amount of memory. The
    global strings and arrays you emit will therefore have a more specific type
    annotation than the output of cmp_rty. You will have to carefully bitcast
    gids to satisfy the LLVM type checker.
@@ -108,7 +108,7 @@ let rec cmp_ty : Ast.ty -> Ll.ty = function
 and cmp_rty : Ast.rty -> Ll.ty = function
   | Ast.RString  -> I8
   | Ast.RArray u -> Struct [I64; Array(0, cmp_ty u)]
-  | Ast.RFun (ts, t) -> 
+  | Ast.RFun (ts, t) ->
       let args, ret = cmp_fty (ts, t) in
       Fun (args, ret)
 
@@ -138,7 +138,7 @@ let gensym : string -> string =
   let c = ref 0 in
   fun (s:string) -> incr c; Printf.sprintf "_%s%d" s (!c)
 
-(* Amount of space an Oat type takes when stored in the satck, in bytes.  
+(* Amount of space an Oat type takes when stored in the satck, in bytes.
    Note that since structured values are manipulated by reference, all
    Oat values take 8 bytes on the stack.
 *)
@@ -156,22 +156,20 @@ let oat_alloc_array (t:Ast.ty) (size:Ll.operand) : Ll.ty * operand * stream =
     ; ans_id, Bitcast(arr_ty, Id arr_id, ans_ty) ]
 
 
-
-
 (* Compiles an expression exp in context c, outputting the Ll operand that will
    recieve the value of the expression, and the stream of instructions
-   implementing the expression. 
+   implementing the expression.
 
    Tips:
    - use the provided cmp_ty function!
 
-   - string literals (CStr s) should be hoisted. You'll need to bitcast the 
+   - string literals (CStr s) should be hoisted. You'll need to bitcast the
      resulting gid to (Ptr I8)
 
    - use the provided "oat_alloc_array" function to implement literal arrays
      (CArr) and the (NewArr) expressions
 
-   - we found it useful to write a helper function 
+   - we found it useful to write a helper function
      cmp_exp_as : Ctxt.t -> Ast.exp node -> Ll.ty -> Ll.operand * stream
      that compiles an expression and optionally inserts a bitcast to the
      desired Ll type. This is useful for dealing with OAT identifiers that
@@ -179,10 +177,52 @@ let oat_alloc_array (t:Ast.ty) (size:Ll.operand) : Ll.ty * operand * stream =
 
 *)
 let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
-  failwith "cmp_exp unimplemented"    
+  begin match exp.elt with
+    |CBool true -> I1, Const 1L, []
+    |CBool false -> I1, Const 0L, []
+    |CInt x -> I64, Const x, []
+    |Bop (op, x1, x2) ->
+      let (ty1, op1, s1) = cmp_exp c x1 in
+      let (ty2, op2, s2) = cmp_exp c x2 in
+      let var = (gensym "") in
+      begin match op with
+        |Add -> I64, Id var, [I (var, (Binop (Add, I64, op1, op2)))] @ s2 @ s1
+        |Sub -> I64, Id var, [I (var, (Binop (Sub, I64, op1, op2)))] @ s2 @ s1
+        |Mul -> I64, Id var, [I (var, (Binop (Mul, I64, op1, op2)))] @ s2 @ s1
+        |Eq -> I1, Id var, [I (var, (Icmp (Eq, I64, op1, op2)))] @ s2 @ s1
+        |Neq -> I1, Id var, [I (var, (Icmp (Ne, I64, op1, op2)))] @ s2 @ s1
+        |Lt -> I1, Id var, [I (var, (Icmp (Slt, I64, op1, op2)))] @ s2 @ s1
+        |Lte -> I1, Id var, [I (var, (Icmp (Sle, I64, op1, op2)))] @ s2 @ s1
+        |Gt -> I1, Id var, [I (var, (Icmp (Sgt, I64, op1, op2)))] @ s2 @ s1
+        |Gte -> I1, Id var, [I (var, (Icmp (Sge, I64, op1, op2)))] @ s2 @ s1
+        |And -> I1, Id var, [I (var, (Binop (And, I1, op1, op2)))] @ s2 @ s1
+        |Or -> I1, Id var, [I (var, (Binop (Or, I1, op1, op2)))] @ s2 @ s1
+        |IAnd -> I64, Id var, [I (var, (Binop (And, I64, op1, op2)))] @ s2 @ s1
+        |IOr -> I64, Id var, [I (var, (Binop (Or, I64, op1, op2)))] @ s2 @ s1
+        |Shl -> I64, Id var, [I (var, (Binop (Shl, I64, op1, op2)))] @ s2 @ s1
+        |Shr -> I64, Id var, [I (var, (Binop (Lshr, I64, op1, op2)))] @ s2 @ s1
+        |Sar -> I64, Id var, [I (var, (Binop (Ashr, I64, op1, op2)))] @ s2 @ s1
+      end
+    |Uop (op, x) ->
+      let (ty, op1, s) = cmp_exp c x in
+      let var = (gensym "") in
+      begin match op with
+        |Neg -> I64, Id var, [I (var, (Binop (Mul, I64, op1, Const (Int64.neg 1L))))] @ s
+        |Lognot -> I1, Id var, [I (var, (Binop (Xor, I1, op1, Const (Int64.one))))] @ s
+        |Bitnot -> I64, Id var, [I (var, (Binop (Xor, I64, op1, Const (Int64.minus_one))))] @ s
+      end
+    |Id x -> (*Should return pointer to variable, not value of variable*)
+      let (ty, op) = Ctxt.lookup x c in
+      let uid = gensym "" in
+      begin match ty with
+        |Ptr(ty) -> ty, Id(uid), [I(uid, Load(Ptr(ty), op))]
+        |_ -> invalid_arg "array not implemented"
+      end
+    |_ -> invalid_arg "expression not implemented"
+  end
 
 
-(* Compile a statement in context c with return typ rt. Return a new context, 
+(* Compile a statement in context c with return typ rt. Return a new context,
    possibly extended with new local bindings, and the instruction stream
    implementing the statement.
 
@@ -194,9 +234,9 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
    - for local variable declarations, you will need to emit Allocas in the
      entry block of the current function using the E() constructor.
 
-   - don't forget to add a bindings to the context for local variable 
+   - don't forget to add a bindings to the context for local variable
      declarations
-   
+
    - you can avoid some work by translating For loops to the corresponding
      While loop, building the AST and recursively calling cmp_stmt
 
@@ -209,12 +249,94 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
 
  *)
 let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
-  failwith "cmp_stmt not implemented"
+  let make_stmts return_type (c, stream) stmt : (Ctxt.t * stream) =
+    let (c, s) = cmp_stmt c return_type stmt in
+    c, s @ stream in
+  begin match stmt.elt with
+    |Ret (Some e) ->
+      let (ty, op, stream) = cmp_exp c e in
+      (c, [T (Ret (ty, Some op))] @ stream)
+    |Decl (id, e) ->
+      let (ty, op, stream) = cmp_exp c e in
+      let uid = gensym "" in
+      Ctxt.add c id (Ptr ty, Id uid),
+      [I ("", (Store (ty, op, (Id uid))))] @ [E (uid, (Alloca ty))] @ stream
+    |If (e, s1, s2) ->
+      let (ty, op, stream) = cmp_exp c e in
+      let if_lbl = gensym "if" in
+      let else_lbl = gensym "else" in
+      let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s1 in
+      let (c, stream2) = List.fold_left (make_stmts rt) (c, []) s2 in
+      begin match s2 with
+        |[] ->
+          c, stream2 @ [L else_lbl] @
+             [T (Br else_lbl)] @ stream1 @ [L if_lbl] @
+             [T (Cbr (op, if_lbl, else_lbl))] @ stream
+        |_ ->
+          c, stream2 @ [L else_lbl] @
+             stream1 @ [L if_lbl] @
+             [T (Cbr (op, if_lbl, else_lbl))] @ stream
+      end
+    |While (e, s) ->
+      let (ty, op, stream) = cmp_exp c e in
+      let cnd_lbl = gensym "cnd" in
+      let end_lbl = gensym "end" in
+      let loop_lbl = gensym "loop" in
+      let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s in
+      c, [L end_lbl] @
+         [T (Br cnd_lbl)] @ stream1 @ [L loop_lbl] @
+         [T (Cbr (op, loop_lbl, end_lbl))] @ stream @ [L cnd_lbl] @
+         [T (Br cnd_lbl)]
+    |Assn (le, re) ->
+      let (tyr, opr, streamr) = cmp_exp c re in (*evaluate le and store op in le instead of var. Fix expression id first*)
+      begin match le.elt with
+        |Id id ->
+          let (tyl, opl) = Ctxt.lookup id c in
+          c, [I ("", Store (tyr, opr, opl))] @ streamr
+        |_ -> invalid_arg "array not implemented"
+      end
+    |For (vdecls, e, inc, s) ->
+      (*Declaration*)
+      let (id, edecl) = match (List.hd vdecls) with (id, e) -> id, e in
+      let (ty, op, stream) = cmp_exp c edecl in
+      let uid = gensym "" in
+      let c = Ctxt.add c id (Ptr ty, Id uid) in
+      let decl = [I ("", (Store (ty, op, (Id uid))))] @
+                 [E (uid, (Alloca ty))] @ stream in
+
+      (*Operations for increment*)
+      let inc = match inc with
+        |Some x -> x
+        |_ -> invalid_arg "invalid increment statement in for loop" in
+      let (le, re) = match inc.elt with
+        |Assn (le, re) -> le, re
+        |_ -> invalid_arg "Invalid increment statement in for loop" in
+      let (tyr, opr, streamr) = cmp_exp c re in
+      let (tyl, opl) = Ctxt.lookup id c in
+
+      (*While loop*)
+      let e = match e with
+        |Some x -> x
+        |_ -> invalid_arg "Invalid expression in for loop" in
+      let (ty, op, stream) = cmp_exp c e in
+      let cnd_lbl = gensym "cnd" in
+      let end_lbl = gensym "end" in
+      let loop_lbl = gensym "loop" in
+      let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s in
+      let loop = [L end_lbl] @ [T (Br cnd_lbl)] @
+                 [I ("", Store (tyr, opr, opl))] @ streamr @ (*increment*)
+                 stream1 @ [L loop_lbl] @
+                 [T (Cbr (op, loop_lbl, end_lbl))] @ stream @ [L cnd_lbl] @
+                 [T (Br cnd_lbl)] in
+
+      c, loop @ decl
+    |_ -> invalid_arg "statement not implemented"
+  end
 
 
 (* Compile a series of statements *)
 and cmp_block (c:Ctxt.t) (rt:Ll.ty) (stmts:Ast.block) : stream =
-  snd @@ List.fold_left (fun (c, code) s -> 
+  snd @@ List.fold_left (fun (c, code) s ->
       let c, stmt_code = cmp_stmt c rt s in
       c, code >@ stmt_code
     ) (c,[]) stmts
@@ -222,7 +344,7 @@ and cmp_block (c:Ctxt.t) (rt:Ll.ty) (stmts:Ast.block) : stream =
 
 
 (* Adds each function identifer to the context at an
-   appropriately translated type.  
+   appropriately translated type.
 
    NOTE: The Gid of a function is just its source name
 *)
@@ -232,16 +354,38 @@ let cmp_function_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
          let ft = TRef (RFun (List.map fst args, frtyp)) in
          Ctxt.add c fname (cmp_ty ft, Gid fname)
       | _ -> c
-    ) c p 
+    ) c p
 
-(* Populate a context with bindings for global variables 
+
+(* Populate a context with bindings for global variables
    mapping OAT identifiers to LLVMlite gids and their types.
 
    Only a small subset of OAT expressions can be used as global initializers
-   in well-formed programs. (The constructors starting with C). 
+   in well-formed programs. (The constructors starting with C).
 *)
+(*let add (c:t) (id:id) (bnd:Ll.ty * Ll.operand) : t = (id,bnd)::c*)
+
+
+
 let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
-    failwith "cmp_global_ctxt unimplemented"
+  let f acc x = match x with
+    | Gvdecl g ->
+      let name = g.elt.name in
+      let init = g.elt.init.elt in
+      let bin =
+        begin match init with
+          | CNull ty -> (Ptr (cmp_ty ty), Gid name)
+          | CBool b -> (Ptr I1, Gid name)
+          | CInt i -> (Ptr I64, Gid name)
+          | CStr s -> (Ptr I8, Gid name)   (* TODO: not really sure about this *)
+          | CArr (ty, e) -> failwith "cmp_global_ctxt: CArr not implemented"
+          | _ -> failwith "cmp_global_ctxt: invalid type of global initializer"
+        end
+      in
+      Ctxt.add acc name bin
+    | _ -> acc
+  in
+  List.fold_left f c p
 
 (* Compile a function declaration in global context c. Return the LLVMlite cfg
    and a list of global declarations containing the string literals appearing
@@ -252,10 +396,24 @@ let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
    2. Store the function arguments in their corresponding alloca'd stack slot
    3. Extend the context with bindings for function variables
    3. Compile the body of the function using cmp_block
-   4. Use cfg_of_stream to produce a LLVMlite cfg from 
- *)
+   4. Use cfg_of_stream to produce a LLVMlite cfg from
+*)
+
 let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) list =
-  failwith "cmp_fdecl not implemented"
+  let f = f.elt in
+  let f_ty = cmp_fty ((List.map fst f.args), f.frtyp) in
+  let f_param = List.map snd f.args in
+  let g = fun (c, acc) (ty, id) ->
+    let uid = gensym id in
+    let ty = cmp_ty ty in
+    let c = Ctxt.add c id (Ptr ty, Id uid) in
+    c, acc @ [E(uid, Alloca ty)] @ [I("", Store (ty, (Id id), (Id uid)))]
+  in
+  let (c, prologue) = List.fold_left g (c, []) f.args in
+  let body = cmp_block c (cmp_ret_ty f.frtyp) f.body in
+  let f_cfg, gs = cfg_of_stream @@ prologue @ body in
+  {f_ty; f_param; f_cfg}, gs
+
 
 
 (* Compile a global initializer, returning the resulting LLVMlite global
@@ -270,7 +428,13 @@ let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) lis
      be an array of pointers to arrays emitted as additional global declarations
 *)
 let rec cmp_gexp c (e:Ast.exp node) : Ll.gdecl * (Ll.gid * Ll.gdecl) list =
-  failwith "cmp_init not implemented"
+  match e.elt with
+  | CNull ty -> (cmp_ty ty, GNull), []
+  | CBool b -> (I1, GInt (if b then 1L else 0L)), []
+  | CInt i -> (I64, GInt i), []
+  | CStr s -> (Ptr I8, GString s), []
+  | CArr _ -> failwith "unimplemented"
+  | _ -> failwith "cmp_gexp: invalid type of global initializer"
 
 
 (* Oat internals function context ------------------------------------------- *)
@@ -293,7 +457,7 @@ let builtins =
 (* Compile a OAT program to LLVMlite *)
 let cmp_prog (p:Ast.prog) : Ll.prog =
   (* add built-in functions to context *)
-  let init_ctxt = 
+  let init_ctxt =
     List.fold_left (fun c (i, t) -> Ctxt.add c i (Ll.Ptr t, Gid i))
       Ctxt.empty builtins
   in
@@ -303,10 +467,10 @@ let cmp_prog (p:Ast.prog) : Ll.prog =
   let c = cmp_global_ctxt fc p in
 
   (* compile functions and global variables *)
-  let fdecls, gdecls = 
+  let fdecls, gdecls =
     List.fold_right (fun d (fs, gs) ->
         match d with
-        | Ast.Gvdecl { elt=gd } -> 
+        | Ast.Gvdecl { elt=gd } ->
            let ll_gd, gs' = cmp_gexp c gd.init in
            (fs, (gd.name, ll_gd)::gs' @ gs)
         | Ast.Gfdecl fd ->
