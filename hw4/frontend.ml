@@ -193,7 +193,6 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
         |_ -> failwith "array not implemented"
       end
     |Index _ -> failwith "Index unimplemented"
-    |Call _ -> failwith "Call unimplemented"
     |Bop (op, x1, x2) ->
       let (ty1, op1, s1) = cmp_exp c x1 in
       let (ty2, op2, s2) = cmp_exp c x2 in
@@ -224,13 +223,6 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
         |Lognot -> I1, Id var, [I (var, (Binop (Xor, I1, op1, Const (Int64.one))))] @ s
         |Bitnot -> I64, Id var, [I (var, (Binop (Xor, I64, op1, Const (Int64.minus_one))))] @ s
       end
-    |Id x -> (*Should return pointer to variable, not value of variable*)
-      let (ty, op) = Ctxt.lookup x c in
-      let uid = gensym "" in
-      begin match ty with
-        |Ptr(ty) -> ty, Id(uid), [I(uid, Load(Ptr(ty), op))]
-        |_ -> invalid_arg "array not implemented"
-      end
     |Call (f, args) ->
       let g = fun (argsll, stream1) arg ->
         let (tyarg, oparg, streamarg) = cmp_exp c arg in
@@ -247,7 +239,6 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
           ret_type, Id var, [I (var, (Call (ret_type, op, args)))] @ stream
         |_ -> invalid_arg "wrong type for call"
       end
-    |_ -> invalid_arg "expression not implemented"
   end
 
 
@@ -369,7 +360,6 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
       let e = no_loc (Call (f, args)) in
       let (ty, op, stream) = cmp_exp c e in
       c, stream
-    |_ -> invalid_arg "statement not implemented"
   end
 
 
