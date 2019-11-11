@@ -218,6 +218,22 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
         |Ptr(ty) -> ty, Id(uid), [I(uid, Load(Ptr(ty), op))]
         |_ -> invalid_arg "array not implemented"
       end
+    |Call (f, args) ->
+      let g = fun (argsll, stream1) arg ->
+        let (tyarg, oparg, streamarg) = cmp_exp c arg in
+        argsll @ [(tyarg, oparg)], stream1 @ streamarg in
+      let f = begin match f.elt with
+        |Id x -> x
+        |_ -> invalid_arg "wrong operand for call"
+      end in
+      let (ty, op) = Ctxt.lookup_function f c in
+      begin match ty with
+        |Ptr Fun (arg_types, ret_type) ->
+          let (args, stream) = List.fold_left g ([], []) args in
+          let var = gensym "" in
+          ret_type, Id var, [I (var, (Call (ret_type, op, args)))] @ stream
+        |_ -> invalid_arg "wrong type for call"
+      end
     |_ -> invalid_arg "expression not implemented"
   end
 
@@ -265,6 +281,7 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
       let (ty, op, stream) = cmp_exp c e in
       let if_lbl = gensym "if" in
       let else_lbl = gensym "else" in
+      let end_lbl = gensym "end" in
       let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s1 in
       let (c, stream2) = List.fold_left (make_stmts rt) (c, []) s2 in
       begin match s2 with
@@ -273,8 +290,9 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
              [T (Br else_lbl)] @ stream1 @ [L if_lbl] @
              [T (Cbr (op, if_lbl, else_lbl))] @ stream
         |_ ->
-          c, stream2 @ [L else_lbl] @
-             stream1 @ [L if_lbl] @
+          c, [L end_lbl] @
+             [T (Br end_lbl)] @ stream2 @ [L else_lbl] @
+             [T (Br end_lbl)] @ stream1 @ [L if_lbl] @
              [T (Cbr (op, if_lbl, else_lbl))] @ stream
       end
     |While (e, s) ->
@@ -330,6 +348,10 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
                  [T (Br cnd_lbl)] in
 
       c, loop @ decl
+    |SCall (f, args) ->
+      let e = no_loc (Call (f, args)) in
+      let (ty, op, stream) = cmp_exp c e in
+      c, stream
     |_ -> invalid_arg "statement not implemented"
   end
 
@@ -407,7 +429,7 @@ let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) lis
     let uid = gensym id in
     let ty = cmp_ty ty in
     let c = Ctxt.add c id (Ptr ty, Id uid) in
-    c, acc @ [E(uid, Alloca ty)] @ [I("", Store (ty, (Id id), (Id uid)))]
+    c, acc @ [E("", Store (ty, (Id id), (Id uid)))] @ [E(uid, Alloca ty)]
   in
   let (c, prologue) = List.fold_left g (c, []) f.args in
   let body = cmp_block c (cmp_ret_ty f.frtyp) f.body in
