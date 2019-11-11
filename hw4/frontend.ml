@@ -178,9 +178,22 @@ let oat_alloc_array (t:Ast.ty) (size:Ll.operand) : Ll.ty * operand * stream =
 *)
 let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
   begin match exp.elt with
-    |CBool true -> I1, Const 1L, []
-    |CBool false -> I1, Const 0L, []
+    |CNull ty -> cmp_ty ty, Null, []
+    |CBool b -> I1, Const (if b then 1L else 0L), []
     |CInt x -> I64, Const x, []
+    |CStr s -> failwith "CStr unimplemented"
+
+    |CArr _ -> failwith "CArr unimplemented"
+    |NewArr _ -> failwith "NewArr unimplemented"
+    |Id x ->
+      let (ty, op) = Ctxt.lookup x c in
+      let uid = gensym "" in
+      begin match ty with
+        |Ptr(ty) -> ty, Id(uid), [I(uid, Load(Ptr(ty), op))]
+        |_ -> failwith "array not implemented"
+      end
+    |Index _ -> failwith "Index unimplemented"
+    |Call _ -> failwith "Call unimplemented"
     |Bop (op, x1, x2) ->
       let (ty1, op1, s1) = cmp_exp c x1 in
       let (ty2, op2, s2) = cmp_exp c x2 in
@@ -269,9 +282,13 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
     let (c, s) = cmp_stmt c return_type stmt in
     c, s @ stream in
   begin match stmt.elt with
-    |Ret (Some e) ->
-      let (ty, op, stream) = cmp_exp c e in
-      (c, [T (Ret (ty, Some op))] @ stream)
+    |Ret x ->
+      begin match x with
+        |Some e ->
+          let (ty, op, stream) = cmp_exp c e in
+          (c, T(Ret (ty, Some op)) :: stream)
+        |None -> c, [T(Ret (Void, None))]
+      end
     |Decl (id, e) ->
       let (ty, op, stream) = cmp_exp c e in
       let uid = gensym "" in
@@ -311,7 +328,7 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
         |Id id ->
           let (tyl, opl) = Ctxt.lookup id c in
           c, [I ("", Store (tyr, opr, opl))] @ streamr
-        |_ -> invalid_arg "array not implemented"
+        |_ -> failwith"array not implemented"
       end
     |For (vdecls, e, inc, s) ->
       (*Declaration*)
@@ -325,17 +342,17 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
       (*Operations for increment*)
       let inc = match inc with
         |Some x -> x
-        |_ -> invalid_arg "invalid increment statement in for loop" in
+        |_ -> failwith"invalid increment statement in for loop" in
       let (le, re) = match inc.elt with
         |Assn (le, re) -> le, re
-        |_ -> invalid_arg "Invalid increment statement in for loop" in
+        |_ -> failwith"Invalid increment statement in for loop" in
       let (tyr, opr, streamr) = cmp_exp c re in
       let (tyl, opl) = Ctxt.lookup id c in
 
       (*While loop*)
       let e = match e with
         |Some x -> x
-        |_ -> invalid_arg "Invalid expression in for loop" in
+        |_ -> failwith "Invalid expression in for loop" in
       let (ty, op, stream) = cmp_exp c e in
       let cnd_lbl = gensym "cnd" in
       let end_lbl = gensym "end" in
@@ -385,9 +402,6 @@ let cmp_function_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
    Only a small subset of OAT expressions can be used as global initializers
    in well-formed programs. (The constructors starting with C).
 *)
-(*let add (c:t) (id:id) (bnd:Ll.ty * Ll.operand) : t = (id,bnd)::c*)
-
-
 
 let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
   let f acc x = match x with
@@ -399,7 +413,7 @@ let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
           | CNull ty -> (Ptr (cmp_ty ty), Gid name)
           | CBool b -> (Ptr I1, Gid name)
           | CInt i -> (Ptr I64, Gid name)
-          | CStr s -> (Ptr I8, Gid name)   (* TODO: not really sure about this *)
+          | CStr s -> (Ptr (Array(1 + (String.length s), I8)), Gid name)
           | CArr (ty, e) -> failwith "cmp_global_ctxt: CArr not implemented"
           | _ -> failwith "cmp_global_ctxt: invalid type of global initializer"
         end
@@ -454,7 +468,7 @@ let rec cmp_gexp c (e:Ast.exp node) : Ll.gdecl * (Ll.gid * Ll.gdecl) list =
   | CNull ty -> (cmp_ty ty, GNull), []
   | CBool b -> (I1, GInt (if b then 1L else 0L)), []
   | CInt i -> (I64, GInt i), []
-  | CStr s -> (Ptr I8, GString s), []
+  | CStr s -> (Array(1 + (String.length s), I8), GString s), []
   | CArr _ -> failwith "unimplemented"
   | _ -> failwith "cmp_gexp: invalid type of global initializer"
 
