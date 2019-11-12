@@ -181,8 +181,12 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
     |CNull ty -> cmp_ty ty, Null, []
     |CBool b -> I1, Const (if b then 1L else 0L), []
     |CInt x -> I64, Const x, []
-    |CStr s -> failwith "CStr unimplemented"
-
+    |CStr s ->
+      let ty = Ptr I8 in
+      let gid = gensym "" in
+      let uid = gensym "" in
+      ty, Id uid, [G(gid, (Array(1 + String.length s, I8), GString s));
+                  I(uid, (Bitcast(Ptr (Array(1 + (String.length s), I8)), Gid gid, ty)))]
     |CArr _ -> failwith "CArr unimplemented"
     |NewArr _ -> failwith "NewArr unimplemented"
     |Id x ->
