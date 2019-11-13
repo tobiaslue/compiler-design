@@ -188,8 +188,12 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
     |CNull ty -> cmp_ty ty, Null, []
     |CBool b -> I1, Const (if b then 1L else 0L), []
     |CInt x -> I64, Const x, []
-    |CStr s -> failwith "CStr unimplemented"
-
+    |CStr s ->
+      let ty = Ptr I8 in
+      let gid = gensym "" in
+      let uid = gensym "" in
+      ty, Id uid, [G(gid, (Array(1 + String.length s, I8), GString s));
+                   I(uid, (Bitcast(Ptr (Array(1 + (String.length s), I8)), Gid gid, ty)))]
     |CArr (ty_array, e_array) ->
       let third = fun (_, _, x) -> x in
       let length = Int64.of_int (List.length e_array) in
@@ -198,7 +202,6 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
       let e_array_stream = List.flatten @@ List.map third e_array_ll in
       let store_stream = List.flatten @@ List.mapi (store_e ty_alloc op_alloc) e_array_ll in
       ty_alloc, op_alloc, store_stream @ e_array_stream @ stream_alloc
-
     |NewArr (ty_array, e) ->
       let (ty_size, op_size, stream_size) = cmp_exp c e in
       let (ty, op, stream) = oat_alloc_array ty_array op_size in
