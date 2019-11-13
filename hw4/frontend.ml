@@ -218,7 +218,7 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
       let (ar_ty, ar_op, ar_stream) = cmp_exp c ar_e in
       let (id_ty, id_op, id_stream) = cmp_exp c id_e in
       begin match ar_ty with
-        |Ptr (Struct [_; Array (len, ty)]) ->
+        |Ptr (Struct [_; Array (_, ty)]) ->
           let var = gensym "" in
           let target = gensym "" in
           let gep = I (var, (Gep (ar_ty, ar_op, [Const 0L; Const 1L; id_op]))) in
@@ -506,10 +506,13 @@ let rec cmp_gexp c (e:Ast.exp node) : Ll.gdecl * (Ll.gid * Ll.gdecl) list =
   | CArr (ty, e) ->
     let arr_ty = Array(List.length e, cmp_ty ty) in
     let e_ll = List.map (cmp_gexp c) e in
+    let id = gensym "garr" in
     let gdecls = List.map (fun (x, _) -> x) e_ll in
     let gdecls_list = List.flatten @@ List.map (fun (_, x) -> x) e_ll in
-    (arr_ty, GArray (gdecls)), gdecls_list
-  | _ -> failwith "cmp_gexp: invalid type of global initializer"
+    let len = List.length e_ll in
+    (Ptr (Struct [I64; arr_ty]), GGid id),
+    (id, (Struct [I64; arr_ty], GStruct ([I64, GInt (Int64.of_int len); Array (len, cmp_ty ty), GArray(gdecls)])))::gdecls_list
+| _ -> failwith "cmp_gexp: invalid type of global initializer"
 
 
 (* Oat internals function context ------------------------------------------- *)
