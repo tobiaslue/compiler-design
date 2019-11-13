@@ -210,8 +210,9 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
       let (ty, op) = Ctxt.lookup x c in
       let uid = gensym "" in
       begin match ty with
-        |Ptr(ty) -> ty, Id(uid), [I(uid, Load(Ptr(ty), op))]
-        |_ -> failwith "array not implemented"
+        |Ptr (Array (n, ty)) -> Ptr (ty), Id(uid), [I(uid, Bitcast (Ptr (Array (n, ty)), op, Ptr(ty)))]
+        |Ptr (ty) -> ty, Id(uid), [I(uid, Load(Ptr(ty), op))]
+        |_ -> invalid_arg "invalid id"
       end
     |Index (ar_e, id_e) ->
       let (ar_ty, ar_op, ar_stream) = cmp_exp c ar_e in
@@ -351,7 +352,18 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
         |Id id ->
           let (tyl, opl) = Ctxt.lookup id c in
           c, [I ("", Store (tyr, opr, opl))] @ streamr
-        |_ -> failwith"array not implemented"
+        |Index (ar_e, id_e) ->
+          let (ar_ty, ar_op, ar_stream) = cmp_exp c ar_e in
+          let (id_ty, id_op, id_stream) = cmp_exp c id_e in
+          begin match ar_ty with
+            |Ptr (Struct [_; Array (len, ty)]) ->
+              let var = gensym "" in
+              let gep = I (var, (Gep (ar_ty, ar_op, [Const 0L; Const 1L; id_op]))) in
+              let store = I ("", (Store (tyr, opr, Id var))) in
+              c, [store] @ [gep] @ id_stream @ ar_stream @ streamr
+            |_ -> invalid_arg "invalid array type"
+          end
+        |_ -> invalid_arg "invalid lhs in assignment"
       end
     |For (vdecls, e, inc, s) ->
       (*Declaration*)
@@ -436,7 +448,7 @@ let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
           | CBool b -> (Ptr I1, Gid name)
           | CInt i -> (Ptr I64, Gid name)
           | CStr s -> (Ptr (Array(1 + (String.length s), I8)), Gid name)
-          | CArr (ty, e) -> failwith "cmp_global_ctxt: CArr not implemented"
+          | CArr (ty, e) -> (Ptr (Struct [I64; Array((List.length e), (cmp_ty ty))]), Gid name)
           | _ -> failwith "cmp_global_ctxt: invalid type of global initializer"
         end
       in
@@ -491,7 +503,12 @@ let rec cmp_gexp c (e:Ast.exp node) : Ll.gdecl * (Ll.gid * Ll.gdecl) list =
   | CBool b -> (I1, GInt (if b then 1L else 0L)), []
   | CInt i -> (I64, GInt i), []
   | CStr s -> (Array(1 + (String.length s), I8), GString s), []
-  | CArr _ -> failwith "unimplemented"
+  | CArr (ty, e) ->
+    let arr_ty = Array(List.length e, cmp_ty ty) in
+    let e_ll = List.map (cmp_gexp c) e in
+    let gdecls = List.map (fun (x, _) -> x) e_ll in
+    let gdecls_list = List.flatten @@ List.map (fun (_, x) -> x) e_ll in
+    (arr_ty, GArray (gdecls)), gdecls_list
   | _ -> failwith "cmp_gexp: invalid type of global initializer"
 
 
