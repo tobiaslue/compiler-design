@@ -176,6 +176,13 @@ let oat_alloc_array (t:Ast.ty) (size:Ll.operand) : Ll.ty * operand * stream =
      correspond to gids that don't quite have the type you want
 
 *)
+
+let store_e ty op i (ty_e, op_e, _) =
+  let var = gensym "" in
+  let gep = I (var, (Gep (ty, op, [(Const 0L); (Const 1L); (Const (Int64.of_int i))]))) in
+  let store = I ("", (Store (ty_e, op_e, Id var))) in
+  [store] @ [gep]
+
 let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
   begin match exp.elt with
     |CNull ty -> cmp_ty ty, Null, []
@@ -186,9 +193,19 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
       let gid = gensym "" in
       let uid = gensym "" in
       ty, Id uid, [G(gid, (Array(1 + String.length s, I8), GString s));
-                  I(uid, (Bitcast(Ptr (Array(1 + (String.length s), I8)), Gid gid, ty)))]
-    |CArr _ -> failwith "CArr unimplemented"
-    |NewArr _ -> failwith "NewArr unimplemented"
+                   I(uid, (Bitcast(Ptr (Array(1 + (String.length s), I8)), Gid gid, ty)))]
+    |CArr (ty_array, e_array) ->
+      let third = fun (_, _, x) -> x in
+      let length = Int64.of_int (List.length e_array) in
+      let (ty_alloc, op_alloc, stream_alloc) = oat_alloc_array ty_array (Const length) in
+      let e_array_ll = List.map (cmp_exp c) e_array in
+      let e_array_stream = List.flatten @@ List.map third e_array_ll in
+      let store_stream = List.flatten @@ List.mapi (store_e ty_alloc op_alloc) e_array_ll in
+      ty_alloc, op_alloc, store_stream @ e_array_stream @ stream_alloc
+    |NewArr (ty_array, e) ->
+      let (ty_size, op_size, stream_size) = cmp_exp c e in
+      let (ty, op, stream) = oat_alloc_array ty_array op_size in
+      ty, op, stream @ stream_size
     |Id x ->
       let (ty, op) = Ctxt.lookup x c in
       let uid = gensym "" in
@@ -196,7 +213,18 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
         |Ptr(ty) -> ty, Id(uid), [I(uid, Load(Ptr(ty), op))]
         |_ -> failwith "array not implemented"
       end
-    |Index _ -> failwith "Index unimplemented"
+    |Index (ar_e, id_e) ->
+      let (ar_ty, ar_op, ar_stream) = cmp_exp c ar_e in
+      let (id_ty, id_op, id_stream) = cmp_exp c id_e in
+      begin match ar_ty with
+        |Ptr (Struct [_; Array (len, ty)]) ->
+          let var = gensym "" in
+          let target = gensym "" in
+          let gep = I (var, (Gep (ar_ty, ar_op, [Const 0L; Const 1L; id_op]))) in
+          let load = I (target, (Load (Ptr ty, Id var))) in
+          ty, Id target, [load] @ [gep] @ id_stream @ ar_stream
+        |_ -> invalid_arg "invalid array type"
+      end
     |Bop (op, x1, x2) ->
       let (ty1, op1, s1) = cmp_exp c x1 in
       let (ty2, op2, s2) = cmp_exp c x2 in
