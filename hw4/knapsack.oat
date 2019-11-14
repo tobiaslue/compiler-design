@@ -1,3 +1,6 @@
+/* Tobias Lüscher */
+/* Remo Kellenberger */
+
 int max(int x, int y) {
     if (x >= y) {
         return x;

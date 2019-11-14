@@ -7,9 +7,9 @@ open Gradedtests
 (* debug your program.                                          *)
 
 let tests = [
-  ("knapsack.oat", "", "480")
+  ("subarraysum.oat", "", "90")
 ]
 
 let provided_tests : suite = [
-  GradedTest ("knapsack", 5, executed_oat_file tests);
+  GradedTest ("subarraysum", 5, executed_oat_file tests);
 ] 
