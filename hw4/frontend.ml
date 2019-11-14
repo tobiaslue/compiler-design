@@ -177,11 +177,17 @@ let oat_alloc_array (t:Ast.ty) (size:Ll.operand) : Ll.ty * operand * stream =
 
 *)
 
-let store_e ty op i (ty_e, op_e, _) =
+
+(*replace every cmp_exp with cmp_exp_as*)
+    (*maybe cange global array decl*)
+
+let store_e ty_array ty op i (op_e, _) =
   let var = gensym "" in
   let gep = I (var, (Gep (ty, op, [(Const 0L); (Const 1L); (Const (Int64.of_int i))]))) in
-  let store = I ("", (Store (ty_e, op_e, Id var))) in
+  let store = I ("", (Store (cmp_ty ty_array, op_e, Id var))) in
   [store] @ [gep]
+
+
 
 let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
   begin match exp.elt with
@@ -195,12 +201,12 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
       ty, Id uid, [G(gid, (Array(1 + String.length s, I8), GString s));
                    I(uid, (Bitcast(Ptr (Array(1 + (String.length s), I8)), Gid gid, ty)))]
     |CArr (ty_array, e_array) ->
-      let third = fun (_, _, x) -> x in
+      let second = fun (_, x) -> x in
       let length = Int64.of_int (List.length e_array) in
       let (ty_alloc, op_alloc, stream_alloc) = oat_alloc_array ty_array (Const length) in
-      let e_array_ll = List.map (cmp_exp c) e_array in
-      let e_array_stream = List.flatten @@ List.map third e_array_ll in
-      let store_stream = List.flatten @@ List.mapi (store_e ty_alloc op_alloc) e_array_ll in
+      let e_array_ll = List.map (cmp_exp_as c (cmp_ty ty_array)) e_array in
+      let e_array_stream = List.flatten @@ List.map second e_array_ll in
+      let store_stream = List.flatten @@ List.mapi (store_e ty_array ty_alloc op_alloc) e_array_ll in
       ty_alloc, op_alloc, store_stream @ e_array_stream @ stream_alloc
     |NewArr (ty_array, e) ->
       let (ty_size, op_size, stream_size) = cmp_exp c e in
@@ -221,9 +227,11 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
         |Ptr (Struct [_; Array (_, ty)]) ->
           let var = gensym "" in
           let target = gensym "" in
+          let id = gensym "" in
+          let cast = I (id, (Bitcast(ar_ty, ar_op, Ptr I64))) in
           let gep = I (var, (Gep (ar_ty, ar_op, [Const 0L; Const 1L; id_op]))) in
           let load = I (target, (Load (Ptr ty, Id var))) in
-          ty, Id target, [load] @ [gep] @ id_stream @ ar_stream
+          ty, Id target, [load] @ [gep] @ [cast] @ id_stream @ ar_stream
         |_ -> invalid_arg "invalid array type"
       end
     |Bop (op, x1, x2) ->
@@ -257,22 +265,29 @@ let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
         |Bitnot -> I64, Id var, [I (var, (Binop (Xor, I64, op1, Const (Int64.minus_one))))] @ s
       end
     |Call (f, args) ->
-      let g = fun (argsll, stream1) arg ->
-        let (tyarg, oparg, streamarg) = cmp_exp c arg in
-        argsll @ [(tyarg, oparg)], stream1 @ streamarg in
       let f = begin match f.elt with
         |Id x -> x
         |_ -> invalid_arg "wrong operand for call"
       end in
       let (ty, op) = Ctxt.lookup_function f c in
+      let g = fun (argsll, stream1) (arg, ty) ->
+        let (oparg, streamarg) = cmp_exp_as c ty arg in
+        argsll @ [(ty, oparg)], stream1 @ streamarg in
+
       begin match ty with
         |Ptr Fun (arg_types, ret_type) ->
-          let (args, stream) = List.fold_left g ([], []) args in
+          let (args, stream) = List.fold_left g ([], []) (List.combine args arg_types) in
           let var = gensym "" in
           ret_type, Id var, [I (var, (Call (ret_type, op, args)))] @ stream
         |_ -> invalid_arg "wrong type for call"
       end
   end
+
+and cmp_exp_as (c:Ctxt.t) (ty:Ll.ty) (exp:Ast.exp node) : Ll.operand * stream =
+      let (original_ty, op, stream) = cmp_exp c exp in
+      if original_ty = ty then op, stream
+      else let var = gensym "" in
+        Id var, [I (var, Bitcast (original_ty, op, ty))] @ stream
 
 
 (* Compile a statement in context c with return typ rt. Return a new context,
@@ -367,39 +382,21 @@ let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
       end
     |For (vdecls, e, inc, s) ->
       (*Declaration*)
-      let (id, edecl) = match (List.hd vdecls) with (id, e) -> id, e in
-      let (ty, op, stream) = cmp_exp c edecl in
-      let uid = gensym "" in
-      let c = Ctxt.add c id (Ptr ty, Id uid) in
-      let decl = [I ("", (Store (ty, op, (Id uid))))] @
-                 [E (uid, (Alloca ty))] @ stream in
-
-      (*Operations for increment*)
-      let inc = match inc with
+      let f = fun decl -> no_loc (Decl decl) in
+      let decls = List.map f vdecls in
+      let cnd = begin match e with
         |Some x -> x
-        |_ -> failwith"invalid increment statement in for loop" in
-      let (le, re) = match inc.elt with
-        |Assn (le, re) -> le, re
-        |_ -> failwith"Invalid increment statement in for loop" in
-      let (tyr, opr, streamr) = cmp_exp c re in
-      let (tyl, opl) = Ctxt.lookup id c in
+        |_ -> no_loc (CBool true)
+      end in
+      let inc = begin match inc with
+        |Some x -> [x]
+        |_ -> []
+      end in
+      let stream  = cmp_block c rt (decls @ [no_loc (While (cnd, s @ inc))]) in
+      c, stream
 
-      (*While loop*)
-      let e = match e with
-        |Some x -> x
-        |_ -> failwith "Invalid expression in for loop" in
-      let (ty, op, stream) = cmp_exp c e in
-      let cnd_lbl = gensym "cnd" in
-      let end_lbl = gensym "end" in
-      let loop_lbl = gensym "loop" in
-      let (c, stream1) = List.fold_left (make_stmts rt) (c, []) s in
-      let loop = [L end_lbl] @ [T (Br cnd_lbl)] @
-                 [I ("", Store (tyr, opr, opl))] @ streamr @ (*increment*)
-                 stream1 @ [L loop_lbl] @
-                 [T (Cbr (op, loop_lbl, end_lbl))] @ stream @ [L cnd_lbl] @
-                 [T (Br cnd_lbl)] in
 
-      c, loop @ decl
+    
     |SCall (f, args) ->
       let e = no_loc (Call (f, args)) in
       let (ty, op, stream) = cmp_exp c e in
@@ -448,7 +445,7 @@ let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
           | CBool b -> (Ptr I1, Gid name)
           | CInt i -> (Ptr I64, Gid name)
           | CStr s -> (Ptr (Array(1 + (String.length s), I8)), Gid name)
-          | CArr (ty, e) -> (Ptr (Struct [I64; Array((List.length e), (cmp_ty ty))]), Gid name)
+          | CArr (ty, e) -> (Ptr (Ptr (Struct [I64; Array((List.length e), (cmp_ty ty))])), Gid name)
           | _ -> failwith "cmp_global_ctxt: invalid type of global initializer"
         end
       in
