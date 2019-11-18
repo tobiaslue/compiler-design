@@ -1,0 +1,58 @@
+/* Tobias Lüscher */
+/* Remo Kellenberger */
+
+int max(int x, int y) {
+    if (x > y) {
+        return x;
+    } else {
+        return y;
+    }
+}
+
+int min(int x, int y) {
+    if (x < y) {
+        return x;
+    } else {
+        return y;
+    }
+}
+
+int min_arr(int[] arr, int n) {
+    var min = arr[0];
+    for (var i = 1; i < n; i = i+1;) {
+        if (arr[i] < min ) {
+            min = arr[i];
+        }
+    }
+    return min;
+}
+
+int subarraysum(int[] arr, int n) {
+    var prefix_sum = new int[10];
+
+    prefix_sum[0] = arr[0];
+
+    for (var i = 1; i < n; i=i+1;) {
+        prefix_sum[i] = prefix_sum[i-1] + arr[i];
+    }
+
+    var min_prefix_sum = 0;
+    var res = min_arr(arr, n);
+
+    for (var i = 0; i < n; i = i+1;) {
+        res = max(res, prefix_sum[i] - min_prefix_sum); 
+        min_prefix_sum = min(min_prefix_sum, prefix_sum[i]); 
+    }
+
+    return res;
+}
+
+int program (int argc, string[] argv) {
+
+    var arr = new int[]{4, -1, -8, 3, -2, 5, 2, -4, 5, -1};
+    var n = 10;
+
+    var res = subarraysum(arr, n);
+    print_int(res);
+    return 0;
+}
