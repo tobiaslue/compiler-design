@@ -1,2 +1,2 @@
-<student number>,<name>
-<student number>,<name>
+17-925-116, Tobias Lüscher
+17-924-432, Remo Kellenberger
