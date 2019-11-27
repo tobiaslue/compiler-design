@@ -62,15 +62,17 @@ and subtype_ref (c : Tctxt.t) (t1 : Ast.rty) (t2 : Ast.rty) : bool =
     | RArray t1, RArray t2 -> t1 = t2
     | RStruct s1, RStruct s2 ->
       begin match (lookup_struct_option s1 c), (lookup_struct_option s2 c) with
-        | Some _, Some _ -> true
+        | Some f1, Some f2 -> sublist f2 f1
         | _ -> false
       end
     | RFun (ts1, rt1), RFun (ts2, rt2) ->
-      let args = List.fold_left (fun acc (t1, t2) ->
-        acc && subtype c t1 t2
-      ) true (List.combine ts1 ts2)
-      in
-      args && subtype_rt c rt1 rt2
+      if (List.length ts1 <> List.length ts2) then false
+      else
+        let args = List.fold_left2 (fun acc t1 t2 ->
+          acc && subtype c t1 t2
+        ) true ts2 ts1
+        in
+        args && subtype_rt c rt1 rt2
     | _ -> false
 
 and subtype_rt (c : Tctxt.t) (t1 : Ast.ret_ty) (t2 : Ast.ret_ty) : bool =
@@ -78,6 +80,12 @@ and subtype_rt (c : Tctxt.t) (t1 : Ast.ret_ty) (t2 : Ast.ret_ty) : bool =
     | RetVoid, RetVoid -> true
     | RetVal rt1, RetVal rt2 -> subtype c rt1 rt2
     | _ -> false
+
+and sublist xs ys =
+  match xs, ys with
+    | [], ys -> true
+    | xs, [] -> false
+    | x::xs, y::ys -> if x = y then sublist xs ys else false
 
 
 (* well-formed types -------------------------------------------------------- *)
@@ -155,10 +163,10 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
     | CInt _ -> TInt
     | CStr _ -> TRef RString
 
-    | Id id -> 
-      begin match lookup_option id c with
-        | Some ty -> ty 
-        | None -> type_error e "variable not in scope"
+    | Id i -> 
+      begin match Tctxt.lookup_option i c with
+        | Some x -> x 
+        | None -> type_error e @@ "variable not in scope " ^ i
       end
 
     | CArr (ty, es) -> 
@@ -195,7 +203,18 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
         | _ -> type_error e "length wrong type"
       end
 
-    | CStruct _ -> failwith "typecheck_exp: CStruct not implemented"
+    | CStruct (id, fs) ->
+      let fs_sorted = List.sort (fun (x,_) (y,_) -> String.compare x y) fs in
+      let ts' = List.map (fun (_, e) -> typecheck_exp c e) fs_sorted in
+      begin match lookup_struct_option id c with
+        | Some fs -> 
+          let fs_sorted = List.sort (fun x y -> String.compare x.fieldName y.fieldName ) fs in
+          let ts = List.map (fun {fieldName; ftyp} -> ftyp) fs_sorted in
+          if (List.length ts <> List.length ts') then type_error e "wrong number of arguments";
+          List.iter2 (fun t1 t2 -> if not (subtype c t1 t2) then type_error e "wrong struct type") ts' ts;
+          TRef (RStruct id)
+        | None -> type_error e "Struct not declared"
+      end
 
     | Proj (e, id) ->
       begin match typecheck_exp c e with
@@ -208,12 +227,13 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
       end
 
     | Call (e, es) ->
-      let ts = List.map (typecheck_exp c) es in
+      let ts' = List.map (typecheck_exp c) es in
       begin match typecheck_exp c e with
-        | TRef (RFun (tys, RetVal ty)) -> 
-          List.iter2 (fun t1 t2 -> if not (subtype c t1 t2) then type_error e "wrong function type") tys ts;
+        | TRef (RFun (ts, RetVal ty)) ->
+          if (List.length ts' <> List.length ts) then type_error e "wrong number of arguments"
+          else List.iter2 (fun t1 t2 -> if not (subtype c t1 t2) then type_error e "Call: wrong function type") ts' ts;
           ty
-        | _ -> type_error e "wrong function type"
+        | _ -> type_error e "Call: wrong function type"
       end
 
     | Bop (Eq, e1, e2) | Bop (Neq, e1, e2) ->
@@ -271,7 +291,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
       let _ = begin match lhs.elt with
         | Id id -> 
           begin match lookup_global_option id tc with
-            | Some _ -> type_error s ""
+            | Some _ -> type_error s "variable already defined"
             | None -> ()
           end
         | _ -> ()
@@ -279,7 +299,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
       in
       let t1 = typecheck_exp tc lhs in
       let t2 = typecheck_exp tc e in
-      if subtype tc t1 t2 then tc, false
+      if subtype tc t2 t1 then tc, false
       else type_error s "wrong assignment"
 
     | Decl (id, e) -> 
@@ -293,12 +313,12 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
     | SCall (e, es) -> 
       let ts1 = List.map (typecheck_exp tc) es in
       begin match typecheck_exp tc e with
-        | TNullRef RFun (ts2, RetVoid) -> 
+        | TRef RFun (ts2, RetVoid) -> 
           List.iter2 (fun t1 t2 ->
             if not (subtype tc t1 t2) then type_error s "wrong arguments"
           ) ts1 ts2;
           tc, false
-        | _ -> type_error s "wrong function type"
+        | _ -> type_error s "SCall: wrong function type"
       end
 
     | If (e, b1, b2) -> 
@@ -309,6 +329,19 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
         | TBool -> tc, r1 && r2
         | _ -> type_error s "expression must be of type bool"
       end 
+
+    | Cast (ref1, id, e, b1, b2) ->
+      begin match typecheck_exp tc e with
+        | TNullRef ref2 -> 
+          if subtype_ref tc ref2 ref1 then
+            let c_new = add_local tc id (TRef ref1) in
+            let _, r1 = typecheck_block c_new b1 to_ret in
+            let _, r2 = typecheck_block tc b2 to_ret in
+            tc, r1 && r2
+          else 
+            type_error s "Wrong reference type"
+        | _ -> type_error s "not of type ref"
+      end  
 
     | While (e, b)->
       let t = typecheck_exp tc e in
@@ -333,7 +366,8 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
       end;
       begin match s_opt with
         | Some s -> 
-          let _ = typecheck_stmt c_new s to_ret in ()
+          let _, r = typecheck_stmt c_new s to_ret in
+          if r then type_error s "not allowed to return in initialization of for"
         | None -> ()
       end;
       let _ = typecheck_block c_new b to_ret in
@@ -348,16 +382,16 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
           else type_error s "wrong return type"
         | _ -> type_error s "wrong return type"
       end
-
-    | Cast _ -> failwith "unimplemented"
+      
     
 and typecheck_block (tc : Tctxt.t) (b:Ast.block) (to_ret:ret_ty) : Tctxt.t * bool =
   match b with
     | [] -> tc, false
     | [s] -> typecheck_stmt tc s to_ret
     | s1::s2::ss -> 
-      let c, _ = typecheck_stmt tc s1 to_ret in
-      typecheck_block c (s2::ss) to_ret
+      let c, r = typecheck_stmt tc s1 to_ret in
+      if r then type_error s1 "return must be at the end of the block"
+      else typecheck_block c (s2::ss) to_ret
 
 (* struct type declarations ------------------------------------------------- *)
 (* Here is an example of how to implement the TYP_TDECLOK rule, which is 
@@ -428,7 +462,7 @@ let create_struct_ctxt (p:Ast.prog) : Tctxt.t =
         let id = fst t.elt in
         let fields = snd t.elt in
         begin match lookup_struct_option id c with
-          | Some _ -> failwith "Struct already defined"
+          | Some _ -> type_error t "Struct already defined"
           | None -> add_struct c id fields
         end
       | _ -> c
@@ -436,6 +470,10 @@ let create_struct_ctxt (p:Ast.prog) : Tctxt.t =
   ) empty p
 
 let create_function_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
+  let g0 = List.fold_left (fun c (id, (tys, rty)) ->
+    add_global c id (TRef (RFun(tys, rty)))
+  ) tc builtins 
+  in
   List.fold_left (fun c p -> 
     match p with
       | Gfdecl f ->
@@ -444,11 +482,11 @@ let create_function_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
         let rty = f.elt.frtyp in
         let ty = TRef (RFun (tys, rty)) in
         begin match lookup_global_option id c with
-          | Some _ -> failwith "Function already defined"
+          | Some _ -> type_error f "Function already defined"
           | None -> add_global c id ty
         end
       | _ -> c
-  ) tc p 
+  ) g0 p 
 
 let create_global_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
   List.fold_left (fun c p ->
@@ -457,7 +495,7 @@ let create_global_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
         let id = g.elt.name in
         let ty = typecheck_exp tc g.elt.init in
         begin match lookup_global_option id c with
-          | Some _ -> failwith "Global identifier already defined"
+          | Some _ -> type_error g "Global identifier already defined"
           | None -> add_global c id ty
         end
       | _ -> c
