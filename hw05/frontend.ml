@@ -330,20 +330,20 @@ let rec cmp_exp (tc : TypeCtxt.t) (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.ope
   | Ast.NewArr (elt_ty, e1, id, e2) ->
     let _, size_op, size_code = cmp_exp tc c e1 in
     let arr_ty, arr_op, alloc_code = oat_alloc_array tc elt_ty size_op in
-    let arr = gensym "" in
+    let arr = gensym "arrID" in
     let c = Ctxt.add c arr (Ptr arr_ty, Id arr) in
-    let arr_stream = [I (arr, Alloca arr_ty); I ("", Store (arr_ty, arr_op, Id arr))] in
-    let len = gensym "" in
+    let arr_stream = [I ("", Store (arr_ty, arr_op, Id arr)); I (arr, Alloca arr_ty)] in
+    let len = gensym "lenID" in
     let c = Ctxt.add c len (Ptr I64, Id len) in
-    let len_stream = [I (len, Alloca I64); I ("", Store (I64, size_op, Id len))] in
+    let len_stream = [I ("", Store (I64, size_op, Id len)); I (len, Alloca I64)] in
     let vdecls = [id, no_loc (CInt 0L)] in
     let cnd = Some (no_loc (Bop (Lt, (no_loc (Id id)), (no_loc (Id len))))) in
     let inc = Some (no_loc (Assn (no_loc (Id id), no_loc (Bop (Ast.Add, (no_loc (Id id)), (no_loc (CInt 1L))))))) in
     let body = [no_loc (Assn ((no_loc (Index ((no_loc (Id arr)), (no_loc (Id id))))), e2))] in
     let loop = no_loc (For (vdecls, cnd, inc, body)) in
     let _, exec_loop = cmp_stmt tc c Void loop in
-    let newarr = gensym "" in
-    arr_ty, arr_op, size_code >@ alloc_code >@
+    let newarr = gensym "new" in
+    arr_ty, Id newarr, size_code >@ alloc_code >@
                     arr_stream >@ len_stream >@ exec_loop >@
                     [I (newarr, Load (Ptr arr_ty, Id arr))]
 
@@ -412,9 +412,12 @@ and cmp_exp_lhs (tc : TypeCtxt.t) (c:Ctxt.t) (e:exp node) : Ll.ty * Ll.operand *
       | Ptr (Struct [_; Array (_,t)]) -> t
       | _ -> failwith "Index: indexed into non pointer" in
     let ptr_id, tmp_id = gensym "index_ptr", gensym "tmp" in
+    let cast = gensym "" in
     ans_ty, (Id ptr_id),
     arr_code >@ ind_code >@ lift
-      [ptr_id, Gep(arr_ty, arr_op, [i64_op_of_int 0; i64_op_of_int 1; ind_op]) ]
+      [cast, Bitcast (arr_ty, arr_op, Ptr I64)
+      ; "", Call (Void, Gid "oat_assert_array_length", [Ptr I64, Id cast; I64, ind_op])
+      ; ptr_id, Gep(arr_ty, arr_op, [i64_op_of_int 0; i64_op_of_int 1; ind_op]) ]
 
 
 
