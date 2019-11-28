@@ -1,5 +1,6 @@
 open Assert
 open Ast
+open Gradedtests
 
 (* These tests are provided by you -- they will be graded manually *)
 
@@ -27,5 +28,6 @@ let unit_tests = [
 ]
 
 let provided_tests : suite = [
-  GradedTest("Student provided unit tests", 5, unit_tests);  
+  GradedTest("Student provided unit tests", 5, unit_tests); 
+  GradedTest("Student provided oat testcase", 5, executed_oat_file [ ("priorityqueue.oat", "", "370")]);
 ] 
