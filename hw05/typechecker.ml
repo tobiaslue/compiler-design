@@ -177,7 +177,7 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
 
     | NewArr (ty, e1, id, e2) -> 
       begin match lookup_local_option id c with 
-      | Some _ -> type_error e "variable already defined"
+      | Some _ -> type_error e "NewArr: variable already defined"
       | None ->
         let t1 = typecheck_exp c e1 in
         let tc = add_local c id TInt in
@@ -290,9 +290,17 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
     | Assn (lhs, e) ->
       let _ = begin match lhs.elt with
         | Id id -> 
-          begin match lookup_global_option id tc with
-            | Some _ -> type_error s "variable already defined"
-            | None -> ()
+          begin match lookup_local_option id tc with
+            | Some _ -> ()
+            | None ->
+              begin match lookup_global_option id tc with
+                | Some ty ->
+                  begin match ty with
+                    | TRef RFun _ ->  type_error s "Assn: variable already defined"
+                    | _ -> ()
+                  end
+                | None -> ()
+              end
           end
         | _ -> ()
       end
@@ -304,7 +312,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
 
     | Decl (id, e) -> 
       let _ = match lookup_local_option id tc with
-        | Some _ -> type_error s "variable already defined"
+        | Some _ -> type_error s "Decl: variable already defined"
         | None -> ()
       in
       let t = typecheck_exp tc e in
@@ -354,7 +362,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
     | For (vs, e_opt, s_opt, b) ->
       let c_new = List.fold_left (fun c (id, exp) ->
         begin match lookup_local_option id c with
-          | Some _ -> type_error s "variable already defined"
+          | Some _ -> type_error s "For: variable already defined"
           | None ->
             let t = typecheck_exp c exp in
             add_local c id t
