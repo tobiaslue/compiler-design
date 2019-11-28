@@ -1,0 +1,109 @@
+/* Tobias Lüscher */
+/* Remo Kellenberger */
+
+struct Node {
+    int val;
+    int priority;
+
+    Node? next
+}
+
+struct PriorityQueue {
+    Node? head;
+    int len
+}
+
+int peek(PriorityQueue p) {
+    if? (Node hd = p.head) {
+        return hd.val;
+    } else {
+        return -1;
+    }
+}
+
+int pop(PriorityQueue p) {
+    if? (Node hd = p.head) {
+        p.head = hd.next;
+        p.len = p.len - 1;
+        return hd.val;
+    } else {
+        return -1;
+    }
+}
+
+void push(PriorityQueue p, int v, int prio) {
+    var n = new Node {
+        val = v;
+        priority = prio;
+        next = Node null
+    };
+
+    if? (Node hd = p.head) {
+        if (hd.priority < n.priority) {
+            n.next = hd;
+            p.head = n;
+        } else {
+            var i = 1;
+            var prev = hd;
+            var cur_ref = hd.next;
+            var break = false;
+            
+            while (i < p.len & (!break)) {
+                i = i + 1;
+                if? (Node cur  = cur_ref) {
+                    if (cur.priority < n.priority) {
+                        break = true;
+                    } else {
+                        prev = cur;
+                        cur_ref = cur.next;
+                    }
+                }
+            }
+
+            prev.next = n;
+            n.next = cur_ref;
+        }
+    } else {
+        p.head = n;
+    }
+    p.len = p.len + 1;
+    return;
+}
+
+void print(PriorityQueue p) {
+    var cur = p.head;
+    var i = 0;
+    while (i < p.len) {
+        i = i + 1;
+        if? (Node n = cur) {
+            print_int(n.val);
+            cur = n.next;
+        }
+    }
+    return;
+}
+
+int program(int argc, string[] argv) {
+    var p = new PriorityQueue {
+        head = Node null;
+        len = 0
+    };
+
+    push(p, 1, 1);
+    push(p, 3, 3);
+
+    print_int (peek(p));
+
+    push(p, 7, 7);
+    push(p, 2, 2);
+    push(p, 9, 9);
+
+    var v = pop(p);
+    print_int (peek(p));
+
+    push(p, 4, 4);
+
+
+    
+    return 0;
+}
