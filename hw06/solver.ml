@@ -1,11 +1,11 @@
 open Datastructures
 
 (* dataflow analysis graph signature ---------------------------------------- *)
-(* Interface for dataflow graphs structured in a way to facilitate 
-   the general iterative dataflow analysis algorithm.                         
+(* Interface for dataflow graphs structured in a way to facilitate
+   the general iterative dataflow analysis algorithm.
 
    The AsGraph functor in cfg.ml provides an implementation of this
-   DFA_GRAPH signature that converts an LL IR control-flow graph to 
+   DFA_GRAPH signature that converts an LL IR control-flow graph to
    this representation.
 
    NOTE: The direction of the analysis is goverened by how preds and
@@ -26,7 +26,7 @@ module type DFA_GRAPH =
     module NodeS : SetS
     type node = NodeS.elt
 
-    (* dataflow facts associated with the out-edges of the nodes in 
+    (* dataflow facts associated with the out-edges of the nodes in
        this graph *)
     type fact
 
@@ -37,12 +37,12 @@ module type DFA_GRAPH =
     val nodes : t -> NodeS.t
 
     (* the flow function:
-       given a graph node and input fact, compute the resulting fact on the 
-       output edge of the node                                                
+       given a graph node and input fact, compute the resulting fact on the
+       output edge of the node
     *)
     val flow : t -> node -> fact -> fact
 
-    (* lookup / modify the dataflow annotations associated with a node *)    
+    (* lookup / modify the dataflow annotations associated with a node *)
     val out : t -> node -> fact
     val add_fact : node -> fact -> t -> t
 
@@ -65,12 +65,12 @@ module type FACT =
 
 (* generic iterative dataflow solver ---------------------------------------- *)
 (* This functor takes two modules:
-      Fact  - the implementation of the lattice                                
+      Fact  - the implementation of the lattice
       Graph - the dataflow anlaysis graph
 
-   It produces a module that has a single function 'solve', which 
+   It produces a module that has a single function 'solve', which
    implements the iterative dataflow analysis described in lecture.
-      - using a worklist (or workset) nodes 
+      - using a worklist (or workset) nodes
         [initialized with the set of all nodes]
 
       - process the worklist until empty:
@@ -79,7 +79,7 @@ module type FACT =
           . apply the flow function to the combined input to find the new
             output
           . if the output has changed, update the graph and add the node's
-            successors to the worklist                                        
+            successors to the worklist
 
    TASK: complete the [solve] function, which implements the above algorithm.
 *)
@@ -87,6 +87,26 @@ module Make (Fact : FACT) (Graph : DFA_GRAPH with type fact := Fact.t) =
   struct
 
     let solve (g:Graph.t) : Graph.t =
-      failwith "TODO HW6: Solver.solve unimplemented"
-  end
+      let wl = Graph.nodes g in
+      let rec loop = fun (wl:Graph.NodeS.t) (g:Graph.t) : Graph.t ->
+        begin match Graph.NodeS.is_empty wl with
+          |false ->
+            let node = Graph.NodeS.choose wl in
+            let wl = Graph.NodeS.remove node wl in
+            let old_out = Graph.out g node in
+            let preds = Graph.NodeS.elements @@ Graph.preds g node in
+            let new_in = Fact.combine (List.map (fun p -> Graph.out g p) preds) in
+            let new_out = Graph.flow g node new_in in
+            let g = Graph.add_fact node new_out g in
+            let new_wl =
+              if (Fact.compare old_out new_out) <> 0 then
+                let succs = Graph.succs g node in
+                Graph.NodeS.union wl succs
+              else wl
+            in
+            loop new_wl g
+          |true -> g
+        end in
+      loop wl g
 
+  end
